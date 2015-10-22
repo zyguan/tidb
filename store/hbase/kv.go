@@ -16,12 +16,13 @@ package hbasekv
 import (
 	"strings"
 
+	"sync"
+
 	"github.com/c4pt0r/go-hbase"
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/go-themis"
 	"github.com/pingcap/tidb/kv"
-	"sync"
 )
 
 const (

@@ -14,11 +14,15 @@
 package hbasekv
 
 import (
+	"os"
+	"time"
+
 	"github.com/c4pt0r/go-hbase"
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/go-themis"
 	"github.com/pingcap/tidb/kv"
+	"github.com/rcrowley/go-metrics"
 )
 
 var (
@@ -32,7 +36,18 @@ type hbaseSnapshot struct {
 	storeName string
 }
 
-func (s *hbaseSnapshot) Get(k kv.Key) ([]byte, error) {
+// metrics
+var (
+	r    = metrics.NewRegistry()
+	getT = metrics.NewTimer()
+)
+
+func init() {
+	r.Register("Get", getT)
+	metrics.Log(r, 1*time.Second, log.New(os.Stderr, "metrics: ", log.Lmicroseconds))
+}
+
+func (s *hbaseSnapshot) get(k kv.Key) ([]byte, error) {
 	g := hbase.NewGet([]byte(k))
 	g.AddColumn([]byte(ColFamily), []byte(Qualifier))
 	v, err := innerGet(s, g)
@@ -40,6 +55,15 @@ func (s *hbaseSnapshot) Get(k kv.Key) ([]byte, error) {
 		return nil, errors.Trace(err)
 	}
 	return v, nil
+}
+
+func (s *hbaseSnapshot) Get(k kv.Key) ([]byte, error) {
+	var v []byte
+	var err error
+	getT.Time(func() {
+		v, err = s.get(k)
+	})
+	return v, err
 }
 
 // MvccGet returns the specific version of given key, if the version doesn't
@@ -75,7 +99,7 @@ func (s *hbaseSnapshot) NewIterator(param interface{}) kv.Iterator {
 	}
 
 	scanner := s.txn.GetScanner([]byte(s.storeName), k, nil)
-	return innerNewIterator(scanner)
+	return newInnerScanner(scanner)
 }
 
 // MvccIterator seeks to the key in the specific version's snapshot, if the
@@ -83,10 +107,10 @@ func (s *hbaseSnapshot) NewIterator(param interface{}) kv.Iterator {
 func (s *hbaseSnapshot) NewMvccIterator(k kv.Key, ver kv.Version) kv.Iterator {
 	scanner := s.txn.GetScanner([]byte(s.storeName), k, nil)
 	scanner.SetTimeRange(0, ver.Ver+1)
-	return innerNewIterator(scanner)
+	return newInnerScanner(scanner)
 }
 
-func innerNewIterator(scanner *themis.ThemisScanner) kv.Iterator {
+func newInnerScanner(scanner *themis.ThemisScanner) kv.Iterator {
 	it := &hbaseIter{
 		ThemisScanner: scanner,
 	}
