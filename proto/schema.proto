@@ -30,72 +30,51 @@ message JoinColumn {
 }
 
 message Join {
-    optional TableName parentTable  = 1;  // Parent table for this join. 
-                                          // Child table is the source table.
-                                          // link to Table.tableName
     repeated JoinColumn columns     = 2;  // list of columns for this join
     optional TableName constraintName = 3; // Name of constraint
 }	
 
 message IndexColumn {
-    optional string    columnName  = 1;  // links to Column.columnName 
-    optional bool      isAscending = 2;  // sort order of the column
-    optional int32     position    = 3;  // order of the column in the index
-    optional TableName tableName   = 4;  // can be set to override owner name (group index has columns from multiple)
-    optional int32     indexedLength = 5; // number of bytes from column used in index (null if entire column is used)
+    optional string    Name  = 1;
+    optional int32     Offset = 2;  // order of the column in the index
+    optional int32     Length = 3; // number of bytes from column used in index (null if entire column is used)
 }
 
+// Column info in Table.
+// Only contains publiced indices.
 message Index {
-	optional string   indexName   = 1;
-	optional int32    Id     = 2; 
-	optional bool     isPK        = 3;  // Is the primary key index
-	optional bool     isUnique    = 4;  // Is a unique index
-	// 6 Previously used
-	repeated IndexColumn columns  = 5;  // list of columns for this index
-	optional string   description = 6;  // index comment holder 
-	optional TableName constraintName = 14; // name for constraint
+	optional int32    ID     = 1; 
+	optional string   Name   = 2;
+	optional bool     IsPK        = 3;  // Is the primary key index
+	optional bool     IsUnique    = 4;  // Is a unique index
+	repeated IndexColumn Columns  = 5;  // list of columns for this index
 }
 
-// Column in a Table
+// Column info in Table.
+// Only contains publiced columns.
 message Column {
     required int64 ID = 1;
     required string  Name   = 2;
-    optional int32   Type     = 3;  // link to Types.typeName
-    optional bool    isNullable   = 4;  // Can column hold NULL values
-    optional int32   position     = 5;  // order of column in Table 
-    optional int64   initAutoInc  = 8;   // initial auto increment value
-    optional CharCollation charColl = 9; // column defined character set
-                                         // and collation
-    optional string  description  = 10;   // column comment holder
-    optional bool    defaultIdentity = 11; // true if column is identity by default,
-                                            // false if column is identity always, 
-                                            // null if column is not an identity column
-    optional string defaultValue   = 12; // default value for column (null if none specified)
+    optional FieldType   Type     = 3;
+    optional int32   Offset     = 4;
+    optional string defaultValue   = 5; 
 }
 
 message FieldType {
-	required int32 Tp
-	required uint32 Flag
-	required int32 Flen
-	required int32 Decimal
-	optional CharCollation CharsetInfo
-	repeated string Elems
+	required int32 Tp = 1;
+	required uint32 Flag = 2;
+	required int32 Flen = 3;
+	required int32 Decimal = 4;
+	optional CharCollation CharsetInfo = 5;
+	repeated string Elems = 6;
 }
 
 message Table {
-    optional string  tableName    = 1;
-    optional int32   tableId      = 2;  // globally unique id for table
-    optional int32   ordinal      = 3;  // id of table within the group
-    repeated Column  columns      = 4;  // list of columns in the table
+    optional int64    ID	= 1;
+    optional string  Name    = 2;
+    repeated Column  columns      = 3;  // list of columns in the table
+    repeated Index   indexes      = 4;  // list of indexes on the table
     optional CharCollation charColl = 5; // table default character set & collation
-    repeated Index   indexes      = 6;  // list of indexes on the table
-    optional Join    parentTable  = 7;  // Join to parent table
-    optional string  description  = 8;  // Table comment holder
-    optional bool    protected    = 9;  // Table can not be altered or grouped to
-                                        // by user actions. For AIS tables.
-    optional int32   version      = 10; // Version this table was created with.
-                                        // For AIS tables.
-    optional int64    ID         = 12; // uuid unique to this group (including column uuids)
 }
 
 message Property {
