@@ -1,0 +1,104 @@
+// TiDB schema info protobuf description file
+
+package tidb.proto;
+
+option java_package = "com.pingcap.tidb.proto";
+option java_outer_classname = "TiDBProto";
+
+message TableName {
+    required string schemaName = 1;  // DB Name
+    required string tableName  = 2;  // Table Name
+}
+
+message CharCollation {
+   optional string characterSetName = 1;
+   optional string collationOrderName = 2;
+}
+
+enum JoinType {
+   LEFT_OUTER_JOIN  = 0;
+   RIGHT_OUTER_JOIN = 1;
+   FULL_OUTER_JOIN  = 2;
+   INNER_JOIN       = 3;
+}
+
+// One of the column pairs which define the Join.
+message JoinColumn {
+   optional string parentColumn = 1; // link to Column.columnName
+   optional string childColumn  = 2; // link to Column.columnName
+   optional int32  position     = 3; // order of column list in join
+}
+
+message Join {
+    optional TableName parentTable  = 1;  // Parent table for this join. 
+                                          // Child table is the source table.
+                                          // link to Table.tableName
+    repeated JoinColumn columns     = 2;  // list of columns for this join
+    optional TableName constraintName = 3; // Name of constraint
+}	
+
+message IndexColumn {
+    optional string    columnName  = 1;  // links to Column.columnName 
+    optional bool      isAscending = 2;  // sort order of the column
+    optional int32     position    = 3;  // order of the column in the index
+    optional TableName tableName   = 4;  // can be set to override owner name (group index has columns from multiple)
+    optional int32     indexedLength = 5; // number of bytes from column used in index (null if entire column is used)
+}
+
+message Index {
+	optional string   indexName   = 1;
+	optional int32    Id     = 2; 
+	optional bool     isPK        = 3;  // Is the primary key index
+	optional bool     isUnique    = 4;  // Is a unique index
+	// 6 Previously used
+	repeated IndexColumn columns  = 5;  // list of columns for this index
+	optional string   description = 6;  // index comment holder 
+	optional TableName constraintName = 14; // name for constraint
+}
+
+// Column in a Table
+message Column {
+    required int64 ID = 1;
+    required string  Name   = 2;
+    optional int32   Type     = 3;  // link to Types.typeName
+    optional bool    isNullable   = 4;  // Can column hold NULL values
+    optional int32   position     = 5;  // order of column in Table 
+    optional int64   initAutoInc  = 8;   // initial auto increment value
+    optional CharCollation charColl = 9; // column defined character set
+                                         // and collation
+    optional string  description  = 10;   // column comment holder
+    optional bool    defaultIdentity = 11; // true if column is identity by default,
+                                            // false if column is identity always, 
+                                            // null if column is not an identity column
+    optional string defaultValue   = 12; // default value for column (null if none specified)
+}
+
+message FieldType {
+	required int32 Tp
+	required uint32 Flag
+	required int32 Flen
+	required int32 Decimal
+	optional CharCollation CharsetInfo
+	repeated string Elems
+}
+
+message Table {
+    optional string  tableName    = 1;
+    optional int32   tableId      = 2;  // globally unique id for table
+    optional int32   ordinal      = 3;  // id of table within the group
+    repeated Column  columns      = 4;  // list of columns in the table
+    optional CharCollation charColl = 5; // table default character set & collation
+    repeated Index   indexes      = 6;  // list of indexes on the table
+    optional Join    parentTable  = 7;  // Join to parent table
+    optional string  description  = 8;  // Table comment holder
+    optional bool    protected    = 9;  // Table can not be altered or grouped to
+                                        // by user actions. For AIS tables.
+    optional int32   version      = 10; // Version this table was created with.
+                                        // For AIS tables.
+    optional int64    ID         = 12; // uuid unique to this group (including column uuids)
+}
+
+message Property {
+    optional string key = 1;
+    optional string value = 2;
+}
