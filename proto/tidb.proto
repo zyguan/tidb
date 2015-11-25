@@ -1,9 +1,12 @@
 // TiDB schema info protobuf description file
 
-package tidb.proto;
+package tproto;
 
-option java_package = "com.pingcap.tidb.proto";
+option java_package = "org.apache.hadoop.hbase.tidb.cp.generated";
 option java_outer_classname = "TiDBProto";
+option java_generic_services = true;
+option java_generate_equals_and_hash = true;
+option optimize_for = SPEED;
 
 message TableName {
     required string schemaName = 1;  // DB Name
@@ -34,7 +37,7 @@ message Join {
     optional TableName constraintName = 3; // Name of constraint
 }	
 
-message IndexColumn {
+message TIndexColumn {
     optional string    Name  = 1;
     optional int32     Offset = 2;  // order of the column in the index
     optional int32     Length = 3; // number of bytes from column used in index (null if entire column is used)
@@ -42,17 +45,17 @@ message IndexColumn {
 
 // Column info in Table.
 // Only contains publiced indices.
-message Index {
+message TIndex {
 	optional int32    ID     = 1; 
 	optional string   Name   = 2;
 	optional bool     IsPK        = 3;  // Is the primary key index
 	optional bool     IsUnique    = 4;  // Is a unique index
-	repeated IndexColumn Columns  = 5;  // list of columns for this index
+	repeated TIndexColumn Columns  = 5;  // list of columns for this index
 }
 
 // Column info in Table.
 // Only contains publiced columns.
-message Column {
+message TColumn {
     required int64 ID = 1;
     required string  Name   = 2;
     optional FieldType   Type     = 3;
@@ -69,11 +72,11 @@ message FieldType {
 	repeated string Elems = 6;
 }
 
-message Table {
+message TTable {
     optional int64    ID	= 1;
     optional string  Name    = 2;
-    repeated Column  columns      = 3;  // list of columns in the table
-    repeated Index   indexes      = 4;  // list of indexes on the table
+    repeated TColumn  columns      = 3;  // list of columns in the table
+    repeated TIndex   indexes      = 4;  // list of indexes on the table
     optional CharCollation charColl = 5; // table default character set & collation
 }
 
