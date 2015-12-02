@@ -19,6 +19,7 @@ package tidb
 
 import (
 	"net/http"
+	"time"
 	// For pprof
 	_ "net/http/pprof"
 	"strings"
@@ -51,6 +52,8 @@ const (
 	EngineGoLevelDBPersistent = "goleveldb://"
 	EngineBoltDB              = "boltdb://"
 	EngineHBase               = "hbase://"
+	defaultMaxRetries         = 30
+	retrySleepInterval        = 500 * time.Millisecond
 )
 
 type domainMap struct {
@@ -67,16 +70,9 @@ func (dm *domainMap) Get(store kv.Storage) (d *domain.Domain, err error) {
 		return
 	}
 
-	if SchemaLease <= minSchemaLease {
-		SchemaLease = minSchemaLease
-	}
-
-	lease := SchemaLease
-	// if storage is local storage, we may in test environment or
-	// run server in single machine mode, so we don't need wait
-	// 2 * lease time for DDL operation.
-	if localstore.IsLocalStore(store) {
-		lease = 0
+	lease := time.Duration(0)
+	if !localstore.IsLocalStore(store) {
+		lease = schemaLease
 	}
 	d, err = domain.NewDomain(store, lease)
 	if err != nil {
@@ -98,12 +94,21 @@ var (
 	// store.UUID()-> IfBootstrapped
 	storeBootstrapped = make(map[string]bool)
 
-	// SchemaLease is the time(seconds) for re-updating remote schema.
+	// schemaLease is the time for re-updating remote schema.
 	// In online DDL, we must wait 2 * SchemaLease time to guarantee
 	// all servers get the neweset schema.
-	SchemaLease    = 300
-	minSchemaLease = 120
+	// Default schema lease time is 1 second, you can change it with a proper time,
+	// but you must know that too little may cause badly performance degradation.
+	// For production, you should set a big schema lease, like 300s+.
+	schemaLease = 1 * time.Second
 )
+
+// SetSchemaLease changes the default schema lease time for DDL.
+// This function is very dangerous, don't use it if you really know what you do.
+// SetSchemaLease only affects not local storage after bootstrapped.
+func SetSchemaLease(lease time.Duration) {
+	schemaLease = lease
+}
 
 // What character set should the server translate a statement to after receiving it?
 // For this, the server uses the character_set_connection and collation_connection system variables.
@@ -192,16 +197,11 @@ func runStmt(ctx context.Context, s stmt.Statement, args ...interface{}) (rset.R
 	var rs rset.Recordset
 	// before every execution, we must clear affectedrows.
 	variable.GetSessionVars(ctx).SetAffectedRows(0)
-	switch s.(type) {
+	switch ts := s.(type) {
 	case *stmts.PreparedStmt:
-		ps := s.(*stmts.PreparedStmt)
-		return runPreparedStmt(ctx, ps)
+		rs, err = runPreparedStmt(ctx, ts)
 	case *stmts.ExecuteStmt:
-		es := s.(*stmts.ExecuteStmt)
-		rs, err = runExecute(ctx, es, args...)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
+		rs, err = runExecute(ctx, ts, args...)
 	default:
 		if s.IsDDL() {
 			err = ctx.FinishTxn(false)
@@ -213,9 +213,23 @@ func runStmt(ctx context.Context, s stmt.Statement, args ...interface{}) (rset.R
 		rs, err = s.Exec(ctx)
 		stmt.ClearExecArgs(ctx)
 	}
+	// All the history should be added here.
+	se := ctx.(*session)
+	switch ts := s.(type) {
+	case *stmts.PreparedStmt:
+		se.history.add(ts.ID, s)
+	case *stmts.ExecuteStmt:
+		se.history.add(ts.ID, s, args...)
+	default:
+		se.history.add(0, s)
+	}
 	// MySQL DDL should be auto-commit
-	if err == nil && (s.IsDDL() || autocommit.ShouldAutocommit(ctx)) {
-		err = ctx.FinishTxn(false)
+	if s.IsDDL() || autocommit.ShouldAutocommit(ctx) {
+		if err != nil {
+			ctx.FinishTxn(true)
+		} else {
+			err = ctx.FinishTxn(false)
+		}
 	}
 	return rs, errors.Trace(err)
 }
@@ -274,6 +288,10 @@ func RegisterLocalStore(name string, driver engine.Driver) error {
 // Engine is the storage name registered with RegisterStore.
 // Schema is the storage specific format.
 func NewStore(uri string) (kv.Storage, error) {
+	return newStoreWithRetry(uri, defaultMaxRetries)
+}
+
+func newStoreWithRetry(uri string, maxRetries int) (kv.Storage, error) {
 	pos := strings.Index(uri, "://")
 	if pos == -1 {
 		return nil, errors.Errorf("invalid uri format, must engine://schema")
@@ -287,7 +305,17 @@ func NewStore(uri string) (kv.Storage, error) {
 		return nil, errors.Errorf("invalid uri foramt, storage %s is not registered", name)
 	}
 
-	s, err := d.Open(schema)
+	var err error
+	var s kv.Storage
+	for i := 1; i <= maxRetries; i++ {
+		s, err = d.Open(schema)
+		if err == nil || !kv.IsRetryableError(err) {
+			break
+		}
+		sleepTime := time.Duration(uint64(retrySleepInterval) * uint64(i))
+		log.Warnf("Waiting store to get ready, sleep %v and try again...", sleepTime)
+		time.Sleep(sleepTime)
+	}
 	return s, errors.Trace(err)
 }
 

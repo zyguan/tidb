@@ -22,11 +22,12 @@ type testIsolationSuite struct {
 
 func (t *testIsolationSuite) TestInc(c *C) {
 	store, err := tidb.NewStore("memory://test/test_isolation")
+	c.Assert(err, IsNil)
 	defer store.Close()
 
 	threadCnt := 4
 
-	ids := make(map[int64]struct{}, threadCnt*2000)
+	ids := make(map[int64]struct{}, threadCnt*100)
 	var m sync.Mutex
 	var wg sync.WaitGroup
 
@@ -34,9 +35,9 @@ func (t *testIsolationSuite) TestInc(c *C) {
 	for i := 0; i < threadCnt; i++ {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 2000; j++ {
+			for j := 0; j < 100; j++ {
 				var id int64
-				err = kv.RunInNewTxn(store, true, func(txn kv.Transaction) error {
+				err := kv.RunInNewTxn(store, true, func(txn kv.Transaction) error {
 					var err1 error
 					id, err1 = txn.Inc([]byte("key"), 1)
 					return err1
@@ -57,10 +58,11 @@ func (t *testIsolationSuite) TestInc(c *C) {
 
 func (t *testIsolationSuite) TestMultiInc(c *C) {
 	store, err := tidb.NewStore("memory://test/test_isolation")
+	c.Assert(err, IsNil)
 	defer store.Close()
 
 	threadCnt := 4
-	incCnt := 2000
+	incCnt := 100
 	keyCnt := 4
 
 	keys := make([][]byte, 0, keyCnt)
@@ -75,17 +77,17 @@ func (t *testIsolationSuite) TestMultiInc(c *C) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < incCnt; j++ {
-				err = kv.RunInNewTxn(store, true, func(txn kv.Transaction) error {
+				err1 := kv.RunInNewTxn(store, true, func(txn kv.Transaction) error {
 					for _, key := range keys {
-						_, err1 := txn.Inc(key, 1)
-						if err1 != nil {
-							return err1
+						_, err2 := txn.Inc(key, 1)
+						if err2 != nil {
+							return err2
 						}
 					}
 
 					return nil
 				})
-				c.Assert(err, IsNil)
+				c.Assert(err1, IsNil)
 			}
 		}()
 	}

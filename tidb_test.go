@@ -15,6 +15,7 @@ package tidb
 
 import (
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -46,6 +47,12 @@ type testMainSuite struct {
 	createTableSQL string
 	insertSQL      string
 	selectSQL      string
+}
+
+type brokenStore struct{}
+
+func (s *brokenStore) Open(schema string) (kv.Storage, error) {
+	return nil, errors.New("try again later")
 }
 
 func (s *testMainSuite) SetUpSuite(c *C) {
@@ -306,6 +313,15 @@ func (s *testMainSuite) TestitrimSQL(c *C) {
 	}
 }
 
+func (s *testMainSuite) TestRetryOpenStore(c *C) {
+	begin := time.Now()
+	RegisterStore("dummy", &brokenStore{})
+	_, err := newStoreWithRetry("dummy://dummy-store", 3)
+	c.Assert(err, NotNil)
+	elapse := time.Since(begin)
+	c.Assert(uint64(elapse), GreaterEqual, uint64(3*time.Second))
+}
+
 func sessionExec(c *C, se Session, sql string) ([]rset.Recordset, error) {
 	se.Execute("BEGIN;")
 	r, err := se.Execute(sql)
@@ -345,10 +361,6 @@ func exec(c *C, se Session, sql string, args ...interface{}) (rset.Recordset, er
 		return nil, err
 	}
 	rs, err := se.ExecutePreparedStmt(stmtID, args...)
-	if err != nil {
-		return nil, err
-	}
-	err = se.DropPreparedStmt(stmtID)
 	if err != nil {
 		return nil, err
 	}

@@ -30,8 +30,10 @@ const (
 	// StateWriteOnly means we can use any write operation on this schema element,
 	// but outer can't read the changed data.
 	StateWriteOnly
-	// StateReOrgnization meas we are re-orgnizating whole data for this shema changed.
-	StateReOrgnization
+	// StateWriteReorganization means we are re-organizating whole data after write only state.
+	StateWriteReorganization
+	// StateDeleteReorganization means we are re-organizating whole data after delete only state.
+	StateDeleteReorganization
 	// StatePublic means this schema element is ok for all write and read operations.
 	StatePublic
 )
@@ -43,8 +45,10 @@ func (s SchemaState) String() string {
 		return "delete only"
 	case StateWriteOnly:
 		return "write only"
-	case StateReOrgnization:
-		return "reorgnization"
+	case StateWriteReorganization:
+		return "write reorganization"
+	case StateDeleteReorganization:
+		return "delete reorganization"
 	case StatePublic:
 		return "public"
 	default:
@@ -113,6 +117,7 @@ func (i *IndexColumn) Clone() *IndexColumn {
 // It corresponds to the statement `CREATE INDEX Name ON Table (Column);`
 // See: https://dev.mysql.com/doc/refman/5.7/en/create-index.html
 type IndexInfo struct {
+	ID      int64          `json:"id"`
 	Name    CIStr          `json:"idx_name"`   // Index name.
 	Table   CIStr          `json:"tbl_name"`   // Table name.
 	Columns []*IndexColumn `json:"idx_cols"`   // Index columns.
