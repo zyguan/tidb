@@ -162,6 +162,10 @@ func (s *dbSnapshot) Seek(k kv.Key) (kv.Iterator, error) {
 	return newDBIter(s, []byte(k), s.version), nil
 }
 
+func (s *dbSnapshot) Scan(k kv.Key, opts map[string]interface{}) (kv.Iterator, error) {
+	return newDBIter(s, []byte(k), s.version), nil
+}
+
 func (s *dbSnapshot) MvccRelease() {
 	s.Release()
 }

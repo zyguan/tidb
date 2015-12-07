@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/column"
@@ -35,6 +36,7 @@ import (
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/tproto"
 	"github.com/pingcap/tidb/util"
 	"github.com/pingcap/tidb/util/types"
 )
@@ -52,6 +54,18 @@ type Table struct {
 	indexPrefix     string
 	alloc           autoid.Allocator
 	state           model.SchemaState
+}
+
+func (t *Table) ToProto(ctx context.Context) *tproto.TTable {
+	cols := make([]*tproto.TColumn, 0, len(t.Columns))
+	for _, c := range t.Columns {
+		cols = append(cols, c.ToProto())
+	}
+	return &tproto.TTable{
+		ID:      proto.Int64(t.ID),
+		Name:    proto.String(t.Name.O),
+		Columns: cols,
+	}
 }
 
 // TableFromMeta creates a Table instance from model.TableInfo.

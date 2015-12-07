@@ -170,3 +170,21 @@ func setResultFieldInfo(fields []*field.ResultField, values []interface{}) error
 	}
 	return nil
 }
+
+func boolToBytes(b bool) []byte {
+	r := make([]byte, 1)
+	if b {
+		r[0] = 1
+	} else {
+		r[0] = 0
+	}
+	return r
+}
+
+var (
+	DistSQLOpt = map[string]([]byte){
+		"_tidb_dist_sql_":    boolToBytes(true),
+		"_tidb_scan_by_row_": boolToBytes(true),
+		"_tidb_aggs_enable_": boolToBytes(true),
+	}
+)

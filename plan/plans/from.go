@@ -20,6 +20,7 @@ package plans
 import (
 	"strings"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/column"
 	"github.com/pingcap/tidb/context"
@@ -101,9 +102,10 @@ func (r *TableNilPlan) Close() error {
 // it performs a full table scan, but using Filter function,
 // it will return a new IndexPlan if an index is found in Filter function.
 type TableDefaultPlan struct {
-	T      table.Table
-	Fields []*field.ResultField
-	iter   kv.Iterator
+	T        table.Table
+	Fields   []*field.ResultField
+	iter     kv.Iterator
+	DistOpts map[string]([]byte)
 }
 
 // Explain implements the plan.Plan Explain interface.
@@ -269,8 +271,37 @@ func (r *TableDefaultPlan) GetFields() []*field.ResultField {
 	return r.Fields
 }
 
+// dNext use dist sql plan.
+func (r *TableDefaultPlan) distNext(ctx context.Context) (row *plan.Row, err error) {
+	if r.iter == nil {
+		var txn kv.Transaction
+		txn, err = ctx.GetTxn(false)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		opts := make(map[string]([]byte))
+		for k, v := range r.DistOpts {
+			opts[k] = v
+		}
+		// Add table info into opts
+		opts["_tidb_table_info_"], err = proto.Marshal(r.T.ToProto(ctx))
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		txn.SetOption(kv.DistSQL, opts)
+		r.iter, err = txn.Seek([]byte(r.T.FirstKey()))
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+	}
+	return nil, nil
+}
+
 // Next implements plan.Plan Next interface.
 func (r *TableDefaultPlan) Next(ctx context.Context) (row *plan.Row, err error) {
+	if r.DistOpts != nil {
+		return r.distNext(ctx)
+	}
 	if r.iter == nil {
 		var txn kv.Transaction
 		txn, err = ctx.GetTxn(false)

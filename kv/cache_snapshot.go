@@ -128,6 +128,14 @@ func (c *cacheSnapshot) RangeGet(start, end Key, limit int) (map[string][]byte, 
 
 // Seek creates an iterator of snapshot.
 func (c *cacheSnapshot) Seek(k Key) (Iterator, error) {
+	if opt, ok := c.opts.Get(DistSQL); ok {
+		// TODO: check if snapshot is hbase snapshort
+		snapshotIter, err := c.snapshot.Scan(k, opt.(map[string](interface{})))
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		return snapshotIter, nil
+	}
 	cacheIter, err := c.cache.Seek(k)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -149,6 +157,10 @@ func (c *cacheSnapshot) Release() {
 	if c.snapshot != nil {
 		c.snapshot.Release()
 	}
+}
+
+func (c *cacheSnapshot) Scan(k Key, opts map[string]interface{}) (Iterator, error) {
+	return nil, errors.New("Unsupported Methord")
 }
 
 func cachePut(m Mutator, k Key, v []byte) error {

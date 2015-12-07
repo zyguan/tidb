@@ -117,6 +117,9 @@ const (
 	// transaction's commit.
 	// This option is an optimization for frequent checks during a transaction, e.g. batch inserts.
 	PresumeKeyNotExists
+
+	//Options for distributed sql
+	DistSQL
 )
 
 // Retriever is the interface wraps the basic Get and Seek methods.
@@ -218,6 +221,8 @@ type Snapshot interface {
 	RangeGet(start, end Key, limit int) (map[string][]byte, error)
 	// Release releases the snapshot to store.
 	Release()
+	// Scan returns a iterator for scan
+	Scan(start Key, opts map[string]interface{}) (Iterator, error)
 }
 
 // Driver is the interface that must be implemented by a KV storage.

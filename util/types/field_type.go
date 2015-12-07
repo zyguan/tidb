@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/tproto"
 	"github.com/pingcap/tidb/util/charset"
 )
 
@@ -49,6 +51,24 @@ func NewFieldType(tp byte) *FieldType {
 		Tp:      tp,
 		Flen:    UnspecifiedLength,
 		Decimal: UnspecifiedLength,
+	}
+}
+
+func ComposeCharCollation(cs, co string) *tproto.CharCollation {
+	return &tproto.CharCollation{
+		CharacterSetName:   proto.String(cs),
+		CollationOrderName: proto.String(co),
+	}
+}
+
+func (ft *FieldType) ToProto() *tproto.FieldType {
+	return &tproto.FieldType{
+		Tp:          proto.Int32(int32(ft.Tp)),
+		Flag:        proto.Uint32(uint32(ft.Flag)),
+		Decimal:     proto.Int32(int32(ft.Decimal)),
+		Flen:        proto.Int32(int32(ft.Flen)),
+		CharsetInfo: ComposeCharCollation(ft.Charset, ft.Collate),
+		// TODO: add Elems
 	}
 }
 

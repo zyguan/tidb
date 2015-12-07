@@ -89,8 +89,8 @@ func (ts *testSuite) TestBasic(c *C) {
 	})
 
 	indexCnt := func() int {
-		cnt, err := countEntriesWithPrefix(ctx, tb.IndexPrefix())
-		c.Assert(err, IsNil)
+		cnt, err1 := countEntriesWithPrefix(ctx, tb.IndexPrefix())
+		c.Assert(err1, IsNil)
 		return cnt
 	}
 

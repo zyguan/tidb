@@ -79,7 +79,7 @@ func (s *hbaseSnapshot) BatchGet(keys []kv.Key) (map[string][]byte, error) {
 // RangeGet implements kv.Snapshot.RangeGet interface.
 // The range should be [start, end] as Snapshot.RangeGet() indicated.
 func (s *hbaseSnapshot) RangeGet(start, end kv.Key, limit int) (map[string][]byte, error) {
-	scanner := s.txn.GetScanner([]byte(s.storeName), start, end, limit)
+	scanner := s.txn.GetScanner([]byte(s.storeName), start, end, limit, nil)
 	defer scanner.Close()
 
 	m := make(map[string][]byte)
@@ -123,14 +123,27 @@ func internalGet(s *hbaseSnapshot, g *hbase.Get) ([]byte, error) {
 }
 
 func (s *hbaseSnapshot) Seek(k kv.Key) (kv.Iterator, error) {
-	scanner := s.txn.GetScanner([]byte(s.storeName), []byte(k), nil, hbaseBatchSize)
+	scanner := s.txn.GetScanner([]byte(s.storeName), []byte(k), nil, hbaseBatchSize, nil)
+	return newInnerScanner(scanner), nil
+}
+
+func (s *hbaseSnapshot) Scan(k kv.Key, opts map[string]interface{}) (kv.Iterator, error) {
+	hopts := make(map[string]([]byte), len(opts))
+	if opts != nil {
+		for k, v := range opts {
+			if bs, ok := v.([]byte); ok {
+				hopts[k] = bs
+			}
+		}
+	}
+	scanner := s.txn.GetScanner([]byte(s.storeName), []byte(k), nil, hbaseBatchSize, hopts)
 	return newInnerScanner(scanner), nil
 }
 
 // MvccIterator seeks to the key in the specific version's snapshot, if the
 // version doesn't exist, returns the nearest(lower) version's snaphot.
 func (s *hbaseSnapshot) NewMvccIterator(k kv.Key, ver kv.Version) kv.Iterator {
-	scanner := s.txn.GetScanner([]byte(s.storeName), k, nil, hbaseBatchSize)
+	scanner := s.txn.GetScanner([]byte(s.storeName), k, nil, hbaseBatchSize, nil)
 	scanner.SetTimeRange(0, ver.Ver+1)
 	return newInnerScanner(scanner)
 }

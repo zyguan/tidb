@@ -16,6 +16,8 @@ package model
 import (
 	"strings"
 
+	"github.com/golang/protobuf/proto"
+	"github.com/pingcap/tidb/tproto"
 	"github.com/pingcap/tidb/util/types"
 )
 
@@ -70,6 +72,15 @@ type ColumnInfo struct {
 func (c *ColumnInfo) Clone() *ColumnInfo {
 	nc := *c
 	return &nc
+}
+
+func (c *ColumnInfo) ToProto() *tproto.TColumn {
+	// TODO: copy default value
+	return &tproto.TColumn{
+		ID:   proto.Int64(c.ID),
+		Name: proto.String(c.Name.O),
+		Type: c.FieldType.ToProto(),
+	}
 }
 
 // TableInfo provides meta data describing a DB table.

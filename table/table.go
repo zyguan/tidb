@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/tidb/meta/autoid"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/sessionctx/db"
+	"github.com/pingcap/tidb/tproto"
 )
 
 // RecordIterFunc is used for low-level record iteration.
@@ -108,6 +109,9 @@ type Table interface {
 
 	// LockRow locks a row.
 	LockRow(ctx context.Context, h int64) error
+
+	// ToProto convert table into protobuf
+	ToProto(ctx context.Context) *tproto.TTable
 }
 
 // TableFromMeta builds a table.Table from *model.TableInfo.
