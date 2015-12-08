@@ -18,6 +18,8 @@
 package plans
 
 import (
+	"encoding/binary"
+	"fmt"
 	"strings"
 
 	"github.com/golang/protobuf/proto"
@@ -293,8 +295,20 @@ func (r *TableDefaultPlan) distNext(ctx context.Context) (row *plan.Row, err err
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
+		if !r.iter.Valid() {
+			return
+		}
+		row = &plan.Row{}
+		v := r.iter.Value()
+		data := binary.BigEndian.Uint64(v)
+		fmt.Println("Get count result: ", data)
+		row.Data = append(row.Data, data)
+		//row.RowKeys = append(row.RowKeys, "agg-count")
+		rf := &field.ResultField{}
+		r.Fields = []*field.ResultField{rf}
+		setResultFieldInfo(r.Fields, row.Data)
 	}
-	return nil, nil
+	return
 }
 
 // Next implements plan.Plan Next interface.

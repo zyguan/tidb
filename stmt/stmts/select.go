@@ -18,6 +18,8 @@
 package stmts
 
 import (
+	"fmt"
+
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/context"
@@ -130,6 +132,13 @@ func (s *SelectStmt) Plan(ctx context.Context) (plan.Plan, error) {
 		r, err = s.From.Plan(ctx)
 		if err != nil {
 			return nil, err
+		}
+		if s.Text == "select count(*) from t;" {
+			fmt.Println("[DSQL] hit dist sql plan", s.Text)
+			jp := r.(*plans.JoinPlan)
+			tp := jp.Left.(*plans.TableDefaultPlan)
+			tp.DistOpts = plans.DistSQLOpt
+			return tp, nil
 		}
 	} else if s.Fields != nil {
 		// Only evaluate fields values.

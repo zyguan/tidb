@@ -150,7 +150,7 @@ func (s *mockSnapshot) Seek(k Key) (Iterator, error) {
 	return s.store.Seek(k)
 }
 
-func (s *mockSnapshot) Scan(k Key, opts map[string]interface{}) (Iterator, error) {
+func (s *mockSnapshot) Scan(k Key, opts map[string]([]byte)) (Iterator, error) {
 	return s.store.Seek(k)
 }
 
