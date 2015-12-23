@@ -45,6 +45,7 @@ import (
 	"github.com/pingcap/tidb/store/hbase"
 	"github.com/pingcap/tidb/store/localstore"
 	"github.com/pingcap/tidb/store/localstore/boltdb"
+	"github.com/pingcap/tidb/store/localstore/crocksdb"
 	"github.com/pingcap/tidb/store/localstore/engine"
 	"github.com/pingcap/tidb/store/localstore/goleveldb"
 )
@@ -54,6 +55,7 @@ const (
 	EngineGoLevelDBMemory     = "memory://"
 	EngineGoLevelDBPersistent = "goleveldb://"
 	EngineBoltDB              = "boltdb://"
+	EngineCRocksDB            = "crocksdb://"
 	EngineHBase               = "hbase://"
 	defaultMaxRetries         = 30
 	retrySleepInterval        = 500 * time.Millisecond
@@ -367,6 +369,7 @@ func init() {
 	RegisterLocalStore("memory", goleveldb.MemoryDriver{})
 	RegisterLocalStore("goleveldb", goleveldb.Driver{})
 	RegisterLocalStore("boltdb", boltdb.Driver{})
+	RegisterLocalStore("crocksdb", crocksdb.Driver{})
 	RegisterStore("hbase", hbasekv.Driver{})
 
 	// start pprof handlers

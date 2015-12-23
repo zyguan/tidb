@@ -11,7 +11,7 @@ void _debug_output(buflist_t* l)
 {
     int i = 0;
     for (i = 0; i < l->size; i++) {
-        printf("%02x ", l->buf[i]);
+        printf("%02X ", (char)(l->buf[i]));
     }
     printf("%d %d\n", l->size, l->len);
 }
@@ -25,7 +25,7 @@ buflist_t* buflist_new()
     return ret;
 }
 
-buflist_t* buflist_new_from_buf(const char* buf, uint32_t sz)
+buflist_t* buflist_new_from_buf(const unsigned char* buf, uint32_t sz)
 {
     buflist_t* ret = malloc(sizeof(buflist_t) + sz);
     ret->size = sz;
@@ -42,7 +42,7 @@ buflist_t* buflist_new_from_buf(const char* buf, uint32_t sz)
 
 uint32_t buflist_len(buflist_t* l) { return l->len; }
 
-void buflist_push(buflist_t** l, char* buf, uint32_t size)
+void buflist_push(buflist_t** l, unsigned char* buf, uint32_t size)
 {
     int i;
     int new_size = (*l)->size + size + sizeof(uint32_t);
@@ -61,6 +61,7 @@ void buflist_push(buflist_t** l, char* buf, uint32_t size)
     (*l)->len++;
 }
 
+/*
 void buflist_get(
     buflist_t* l, int idx, char** ret_ptr, uint32_t* size, char** err)
 {
@@ -78,12 +79,12 @@ void buflist_get(
     *ret_ptr = h + sizeof(uint32_t);
     *size = (uint32_t)(*h);
 }
-
 void buflist_getbuf(buflist_t* l, char** ret_ptr, uint32_t* sz)
 {
     *ret_ptr = l->buf;
     *sz = l->size;
 }
+*/
 
 void buflist_free(buflist_t* l)
 {
@@ -95,7 +96,7 @@ void buflist_free(buflist_t* l)
 buflist_iter_t* buflist_iter_new(const buflist_t* l)
 {
     buflist_iter_t* ret = malloc(sizeof(buflist_iter_t));
-    ret->offset = (char*)l->buf;
+    ret->offset = (unsigned char*)l->buf;
     ret->l = l;
     return ret;
 }
@@ -105,7 +106,8 @@ void buflist_iter_next(buflist_iter_t* it)
     it->offset += (uint32_t)(*it->offset) + sizeof(uint32_t);
 }
 
-void buflist_iter_cur(buflist_iter_t* it, char** ret_ptr, uint32_t* size)
+void buflist_iter_cur(
+    buflist_iter_t* it, unsigned char** ret_ptr, uint32_t* size)
 {
     if (buflist_iter_valid(it)) {
         *size = (uint32_t)(*(it->offset));

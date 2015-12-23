@@ -30,10 +30,14 @@ func (s *testSuite) TearDownSuite(c *C) {
 
 func (s *testSuite) TestPut(c *C) {
 	b := s.db.NewBatch()
-	for i := 0; i < 100000; i++ {
+	for i := 0; i < 10000; i++ {
 		k := []byte(fmt.Sprintf("row_%d", i))
 		b.Put(k, k)
 	}
 	s.db.Commit(b)
-	s.db.MultiSeek([][]byte{[]byte("1"), []byte("2")})
+	var t [][]byte
+	for i := 0; i < 1000; i++ {
+		t = append(t, []byte(fmt.Sprintf("row_%d", i)))
+	}
+	s.db.MultiSeek(t)
 }

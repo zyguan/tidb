@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 )
 
 // ActionType is the type for DDL action.
@@ -96,6 +97,7 @@ func (job *Job) Encode() ([]byte, error) {
 // Decode decodes job from the json buffer, we must use DecodeArgs later to
 // decode special args for this job.
 func (job *Job) Decode(b []byte) error {
+	log.Error(string(b))
 	err := json.Unmarshal(b, job)
 	return errors.Trace(err)
 }
