@@ -15,14 +15,17 @@ package localstore
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metric"
 )
 
 var (
-	_ kv.Transaction = (*dbTxn)(nil)
+	_            kv.Transaction = (*dbTxn)(nil)
+	localMonitor                = metric.NewKVMonitor("localstore")
 )
 
 // dbTxn is not thread safe
@@ -49,6 +52,8 @@ func (txn *dbTxn) markOrigin(k []byte) {
 // Implement transaction interface
 
 func (txn *dbTxn) Get(k kv.Key) ([]byte, error) {
+	startTs := time.Now()
+	defer localMonitor.OnGetFinish(startTs)
 	log.Debugf("[kv] get key:%q, txn:%d", k, txn.tid)
 	val, err := txn.UnionStore.Get(k)
 	if err != nil {
@@ -59,6 +64,8 @@ func (txn *dbTxn) Get(k kv.Key) ([]byte, error) {
 }
 
 func (txn *dbTxn) Set(k kv.Key, data []byte) error {
+	startTs := time.Now()
+	defer localMonitor.OnSetFinish(startTs)
 	log.Debugf("[kv] set key:%q, txn:%d", k, txn.tid)
 	err := txn.UnionStore.Set(k, data)
 	if err != nil {
@@ -70,6 +77,8 @@ func (txn *dbTxn) Set(k kv.Key, data []byte) error {
 }
 
 func (txn *dbTxn) Inc(k kv.Key, step int64) (int64, error) {
+	startTs := time.Now()
+	defer localMonitor.OnIncFinish(startTs)
 	log.Debugf("[kv] Inc %q, step %d txn:%d", k, step, txn.tid)
 
 	txn.markOrigin(k)
@@ -96,6 +105,8 @@ func (txn *dbTxn) String() string {
 }
 
 func (txn *dbTxn) Seek(k kv.Key) (kv.Iterator, error) {
+	startTs := time.Now()
+	defer localMonitor.OnSeekFinish(startTs)
 	log.Debugf("[kv] seek key:%q, txn:%d", k, txn.tid)
 	iter, err := txn.UnionStore.Seek(k)
 	if err != nil {
