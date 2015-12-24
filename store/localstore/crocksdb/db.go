@@ -185,7 +185,6 @@ func (d *db) MultiSeek(keys [][]byte) []*engine.MSeekResult {
 			r.Key = keyList[i]
 			r.Value = valList[i]
 		}
-		log.Error("!!!!!!!!!!!!!!!", string(keyList[i]), string(valList[i]))
 		ret = append(ret, r)
 	}
 	return ret

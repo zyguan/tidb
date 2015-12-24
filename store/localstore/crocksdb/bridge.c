@@ -55,11 +55,11 @@ void get(const unsigned char* key, uint32_t key_sz, unsigned char** ret_val,
     size_t len;
     char* err = NULL;
     char* returned_value
-        = rocksdb_get(db, readoptions, key, key_sz, &len, &err);
+        = rocksdb_get(db, readoptions, (const char*)key, key_sz, &len, &err);
     if (err != NULL) {
         return;
     }
-    *ret_val = returned_value;
+    *ret_val = (unsigned char*)returned_value;
     *ret_sz = len;
 }
 
@@ -70,12 +70,12 @@ void seek(const unsigned char* start, uint32_t start_sz,
     rocksdb_readoptions_t* readoptions = rocksdb_readoptions_create();
     rocksdb_iterator_t* it = rocksdb_create_iterator(db, readoptions);
     // get start keys
-    rocksdb_iter_seek(it, start, (size_t)start_sz);
+    rocksdb_iter_seek(it, (const char*)start, (size_t)start_sz);
     if (rocksdb_iter_valid(it)) {
         size_t key_sz = 0;
         size_t val_sz = 0;
-        *ret_key = (char*)rocksdb_iter_key(it, &key_sz);
-        *ret_val = (char*)rocksdb_iter_value(it, &val_sz);
+        *ret_key = (unsigned char*)rocksdb_iter_key(it, &key_sz);
+        *ret_val = (unsigned char*)rocksdb_iter_value(it, &val_sz);
         *ret_key_sz = (uint32_t)key_sz;
         *ret_val_sz = (uint32_t)val_sz;
     }
@@ -94,7 +94,7 @@ void multi_put(const unsigned char* key_list, uint32_t key_list_sz,
     buflist_iter_t* val_it = buflist_iter_new(vals);
 
     for (; buflist_iter_valid(key_it); buflist_iter_next(key_it)) {
-        char *key, *val;
+        unsigned char *key, *val;
         uint32_t key_sz = 0;
         uint32_t val_sz = 0;
         // get key
@@ -104,10 +104,11 @@ void multi_put(const unsigned char* key_list, uint32_t key_list_sz,
         printf("%u %u\n", key_sz, val_sz);
         if (val_sz == 1 && val[0] == '\0') {
             // delete mark
-            rocksdb_writebatch_delete(batch, key, key_sz);
+            rocksdb_writebatch_delete(batch, (const char*)key, key_sz);
         }
         else if (key_sz > 0 && val_sz > 0) {
-            rocksdb_writebatch_put(batch, key, key_sz, val, val_sz);
+            rocksdb_writebatch_put(
+                batch, (const char*)key, key_sz, (const char*)val, val_sz);
         }
         // go next val
         buflist_iter_next(val_it);
@@ -143,22 +144,23 @@ void multi_seek(const unsigned char* start_key_list,
     rocksdb_iter_seek_to_first(it);
 
     for (; buflist_iter_valid(sit); buflist_iter_next(sit)) {
-        char* start_key;
+        unsigned char* start_key;
         uint32_t sz = 0;
         buflist_iter_cur(sit, &start_key, &sz);
-        rocksdb_iter_seek(it, start_key, (size_t)sz);
+        rocksdb_iter_seek(it, (const char*)start_key, (size_t)sz);
         if (rocksdb_iter_valid(it)) {
             size_t key_sz = 0;
             size_t val_sz = 0;
-            char* key = (char*)rocksdb_iter_key(it, &key_sz);
-            char* val = (char*)rocksdb_iter_value(it, &val_sz);
+            unsigned char* key = (unsigned char*)rocksdb_iter_key(it, &key_sz);
+            unsigned char* val
+                = (unsigned char*)rocksdb_iter_value(it, &val_sz);
             if (key != NULL && val != NULL) {
                 buflist_push(&ret_keys, key, key_sz);
                 buflist_push(&ret_vals, val, val_sz);
             }
         }
         else {
-            char s[] = "\0";
+            unsigned char s[] = "\0";
             buflist_push(&ret_keys, s, 1);
             buflist_push(&ret_vals, s, 1);
         }

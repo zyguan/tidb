@@ -32,7 +32,7 @@ buflist_t* buflist_new_from_buf(const unsigned char* buf, uint32_t sz)
     ret->alloc = sz;
     ret->len = 0;
     memcpy(ret->buf, buf, sz);
-    char* h = ret->buf;
+    unsigned char* h = ret->buf;
     while (h < ret->buf + sz) {
         h += (uint32_t)(*h) + sizeof(uint32_t);
         ret->len++;
@@ -52,7 +52,7 @@ void buflist_push(buflist_t** l, unsigned char* buf, uint32_t size)
         (*l)->alloc = new_size * 2;
     }
     // move to buf's tail
-    char* h = (*l)->buf + (*l)->size;
+    unsigned char* h = (*l)->buf + (*l)->size;
     // write node data
     memcpy(h, &size, sizeof(uint32_t));
     memcpy(h + sizeof(uint32_t), buf, size);
@@ -60,31 +60,6 @@ void buflist_push(buflist_t** l, unsigned char* buf, uint32_t size)
     (*l)->size = new_size;
     (*l)->len++;
 }
-
-/*
-void buflist_get(
-    buflist_t* l, int idx, char** ret_ptr, uint32_t* size, char** err)
-{
-    int i;
-    char* h = l->buf;
-    if (idx >= l->len) {
-        *ret_ptr = NULL;
-        *size = 0;
-        *err = strdup("index exceed");
-        return;
-    }
-    for (i = 0; i < idx; i++) {
-        h += (uint32_t)(*h) + sizeof(uint32_t);
-    }
-    *ret_ptr = h + sizeof(uint32_t);
-    *size = (uint32_t)(*h);
-}
-void buflist_getbuf(buflist_t* l, char** ret_ptr, uint32_t* sz)
-{
-    *ret_ptr = l->buf;
-    *sz = l->size;
-}
-*/
 
 void buflist_free(buflist_t* l)
 {
