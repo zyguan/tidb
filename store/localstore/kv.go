@@ -24,6 +24,7 @@ import (
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/store/localstore/engine"
+	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/segmentmap"
 	"github.com/twinj/uuid"
 )
@@ -36,6 +37,7 @@ type op int
 
 const (
 	opSeek = iota + 1
+	opGet
 	opCommit
 )
 
@@ -53,20 +55,45 @@ type command struct {
 	done  chan error
 }
 
+type seekArgs struct {
+	key []byte
+}
+
 type seekReply struct {
 	key   []byte
 	value []byte
 }
 
+type getArgs struct {
+	key []byte
+}
+
+type getReply struct {
+	value []byte
+}
+
+type commitArgs struct {
+}
 type commitReply struct {
 	err error
 }
 
-type seekArgs struct {
-	key []byte
-}
+func (s *dbStore) Get(key kv.Key) ([]byte, error) {
+	c := &command{
+		op:   opGet,
+		args: &getArgs{key: key},
+		done: make(chan error, 1),
+	}
 
-type commitArgs struct {
+	s.commandCh <- c
+	err := <-c.done
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	reply := c.reply.(*getReply)
+	return reply.value, nil
+
 }
 
 // Seek searches for the first key in the engine which is >= key in byte order, returns (nil, nil, ErrNotFound)
@@ -160,6 +187,8 @@ func (s *dbStore) scheduler() {
 			case opCommit:
 				s.doCommit(cmd)
 			}
+		case cmd := <-s.getCmdCh:
+			s.handleGet(cmd)
 		case <-s.closeCh:
 			closed = true
 			// notify seek worker to exit
@@ -215,6 +244,45 @@ func (s *dbStore) tryLock(txn *dbTxn) (err error) {
 	return nil
 }
 
+func (s *dbStore) handleGet(cmd *command) {
+	r := &getReply{}
+	var err error
+	r.value, err = s.doGet(cmd)
+	cmd.reply = r
+	cmd.done <- err
+}
+
+func (s *dbStore) doGet(cmd *command) ([]byte, error) {
+	txn := cmd.txn
+	args := cmd.args.(*getArgs)
+	metaKey := MvccEncodeVersionKey(kv.Key(args.key), kv.MetaVersion)
+	metaVal, err := txn.us.GetRaw(kv.Key(metaKey))
+	if err != nil {
+		if terror.ErrorEqual(err, engine.ErrNotFound) {
+			return nil, kv.ErrNotExist
+		}
+		return nil, err
+	}
+
+	var keyVer kv.Version
+
+	for i := len(metaVal); i >= 8; i -= 8 {
+		log.Error(i, len(metaVal))
+		ver := decodeVersion(metaVal[i-8 : i])
+		if ver.Cmp(kv.Version{Ver: txn.tid}) < 0 {
+			keyVer = ver
+			break
+		}
+	}
+
+	if keyVer.Cmp(kv.MinVersion) == 0 {
+		return nil, kv.ErrNotExist
+	}
+
+	return txn.us.GetRaw(kv.Key(MvccEncodeVersionKey(kv.Key(args.key), keyVer)))
+
+}
+
 func (s *dbStore) doCommit(cmd *command) {
 	txn := cmd.txn
 	curVer, err := globalVersionProvider.CurrentVersion()
@@ -234,7 +302,6 @@ func (s *dbStore) doCommit(cmd *command) {
 		//	s.compactor.OnSet(kv.Key(metaKey))
 		// put dummy meta key, write current version
 		vers := append(txn.metas[string(metaKey)], encodeVersion(curVer)...)
-		log.Errorf("Encode vers:%+v", vers)
 		b.Put(metaKey, vers)
 		mvccKey := MvccEncodeVersionKey(kv.Key(k), curVer)
 		if len(value) == 0 { // Deleted marker
@@ -254,7 +321,8 @@ func (s *dbStore) doCommit(cmd *command) {
 func (s *dbStore) doSeek(seekCmds []*command) {
 	keys := make([][]byte, 0, len(seekCmds))
 	for _, cmd := range seekCmds {
-		keys = append(keys, cmd.args.(*seekArgs).key)
+		args := cmd.args.(*seekArgs)
+		keys = append(keys, args.key)
 	}
 
 	results := s.db.MultiSeek(keys)
@@ -285,6 +353,7 @@ type dbStore struct {
 	wg            *sync.WaitGroup
 
 	commandCh chan *command
+	getCmdCh  chan *command
 	closeCh   chan struct{}
 
 	mu     sync.Mutex
@@ -353,6 +422,7 @@ func (d Driver) Open(path string) (kv.Storage, error) {
 		db:         db,
 		compactor:  newLocalCompactor(localCompactDefaultPolicy, db),
 		commandCh:  make(chan *command, 1000),
+		getCmdCh:   make(chan *command, 1000),
 		closed:     false,
 		closeCh:    make(chan struct{}),
 		wg:         &sync.WaitGroup{},

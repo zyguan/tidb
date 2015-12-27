@@ -62,7 +62,6 @@ func encodeVersion(ver kv.Version) []byte {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Errorf("encode %v to %q", ver, b.Bytes())
 	return b.Bytes()
 }
 
@@ -77,31 +76,7 @@ func decodeVersion(val []byte) kv.Version {
 
 func (txn *dbTxn) Get(k kv.Key) ([]byte, error) {
 	log.Debugf("[kv] get key:%q, txn:%d", k, txn.tid)
-	metaKey := MvccEncodeVersionKey(k, kv.MetaVersion)
-	metaVal, err := txn.us.GetRaw(kv.Key(metaKey))
-	if err != nil {
-		if terror.ErrorEqual(err, engine.ErrNotFound) {
-			return nil, kv.ErrNotExist
-		}
-		return nil, err
-	}
-
-	var keyVer kv.Version
-
-	for i := len(metaVal); i >= 8; i -= 8 {
-		log.Error(i, len(metaVal))
-		ver := decodeVersion(metaVal[i-8 : i])
-		if ver.Cmp(kv.Version{Ver: txn.tid}) < 0 {
-			keyVer = ver
-			break
-		}
-	}
-
-	if keyVer.Cmp(kv.MinVersion) == 0 {
-		return nil, kv.ErrNotExist
-	}
-
-	return txn.us.GetRaw(kv.Key(MvccEncodeVersionKey(k, keyVer)))
+	return txn.us.Get(k)
 }
 
 func (txn *dbTxn) Set(k kv.Key, data []byte) error {

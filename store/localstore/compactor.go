@@ -75,7 +75,7 @@ func (gc *localstoreCompactor) getAllVersions(key kv.Key) ([]kv.EncodedKey, erro
 	k := key
 	ver := kv.MetaVersion
 	// Skip meta key
-	// TODO: fix me
+	// TODO: using meta key to get all version
 	ver.Ver--
 	for ; ver.Ver > 0; ver.Ver-- {
 		mvccK, _, err := gc.db.Seek(MvccEncodeVersionKey(key, ver))
