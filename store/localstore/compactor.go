@@ -106,6 +106,7 @@ func (gc *localstoreCompactor) deleteWorker() {
 		case <-gc.stopCh:
 			return
 		case key := <-gc.delCh:
+			break
 			cnt++
 			batch.Delete(key)
 			// Batch delete.

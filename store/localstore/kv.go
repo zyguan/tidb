@@ -24,7 +24,6 @@ import (
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/store/localstore/engine"
-	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/util/segmentmap"
 	"github.com/twinj/uuid"
 )
@@ -232,9 +231,11 @@ func (s *dbStore) doCommit(cmd *command) {
 	b := s.db.NewBatch()
 	txn.us.WalkBuffer(func(k kv.Key, value []byte) error {
 		metaKey := MvccEncodeVersionKey(kv.Key(k), kv.MetaVersion)
-		s.compactor.OnSet(kv.Key(metaKey))
+		//	s.compactor.OnSet(kv.Key(metaKey))
 		// put dummy meta key, write current version
-		b.Put(metaKey, codec.EncodeUint(nil, curVer.Ver))
+		vers := append(txn.metas[string(metaKey)], encodeVersion(curVer)...)
+		log.Errorf("Encode vers:%+v", vers)
+		b.Put(metaKey, vers)
 		mvccKey := MvccEncodeVersionKey(kv.Key(k), curVer)
 		if len(value) == 0 { // Deleted marker
 			b.Put(mvccKey, nil)

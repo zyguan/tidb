@@ -14,6 +14,8 @@
 package localstore
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/juju/errors"
@@ -54,10 +56,52 @@ func newTxn(s *dbStore, ver kv.Version) *dbTxn {
 }
 
 // Implement transaction interface
+func encodeVersion(ver kv.Version) []byte {
+	var b bytes.Buffer
+	err := binary.Write(&b, binary.BigEndian, ver.Ver)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Errorf("encode %v to %q", ver, b.Bytes())
+	return b.Bytes()
+}
+
+func decodeVersion(val []byte) kv.Version {
+	var ver kv.Version
+	err := binary.Read(bytes.NewBuffer(val), binary.BigEndian, &ver.Ver)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return ver
+}
 
 func (txn *dbTxn) Get(k kv.Key) ([]byte, error) {
 	log.Debugf("[kv] get key:%q, txn:%d", k, txn.tid)
-	return txn.us.Get(k)
+	metaKey := MvccEncodeVersionKey(k, kv.MetaVersion)
+	metaVal, err := txn.us.GetRaw(kv.Key(metaKey))
+	if err != nil {
+		if terror.ErrorEqual(err, engine.ErrNotFound) {
+			return nil, kv.ErrNotExist
+		}
+		return nil, err
+	}
+
+	var keyVer kv.Version
+
+	for i := len(metaVal); i >= 8; i -= 8 {
+		log.Error(i, len(metaVal))
+		ver := decodeVersion(metaVal[i-8 : i])
+		if ver.Cmp(kv.Version{Ver: txn.tid}) < 0 {
+			keyVer = ver
+			break
+		}
+	}
+
+	if keyVer.Cmp(kv.MinVersion) == 0 {
+		return nil, kv.ErrNotExist
+	}
+
+	return txn.us.GetRaw(kv.Key(MvccEncodeVersionKey(k, keyVer)))
 }
 
 func (txn *dbTxn) Set(k kv.Key, data []byte) error {
@@ -157,7 +201,6 @@ func (txn *dbTxn) getMetaKeys() error {
 			}
 			return err1
 		}
-
 		txn.metas[string(metaKey)] = metaVal
 		return nil
 	})
