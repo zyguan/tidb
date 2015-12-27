@@ -203,6 +203,9 @@ func (s *dbStore) scheduler() {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 
+	seekCount := 0
+	getCount := 0
+
 	for {
 		select {
 		case cmd := <-s.commandCh:
@@ -212,11 +215,13 @@ func (s *dbStore) scheduler() {
 			}
 			switch cmd.op {
 			case opSeek:
+				seekCount++
 				seekCh <- cmd
 			case opCommit:
 				s.doCommit(cmd)
 			}
 		case cmd := <-s.getCmdCh:
+			getCount++
 			getCh <- cmd
 		case <-s.closeCh:
 			closed = true
@@ -228,6 +233,7 @@ func (s *dbStore) scheduler() {
 			segmentIndex = segmentIndex % s.recentUpdates.SegmentCount()
 			s.cleanRecentUpdates(segmentIndex)
 			segmentIndex++
+			log.Errorf("seek %d, get %d", seekCount, getCount)
 		}
 	}
 }

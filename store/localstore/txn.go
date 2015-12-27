@@ -21,8 +21,8 @@ import (
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/store/localstore/engine"
+	"github.com/pingcap/tidb/terror"
 )
 
 var (
@@ -171,13 +171,13 @@ func (txn *dbTxn) getMetaKeys() error {
 		metaKey := MvccEncodeVersionKey(kv.Key(k), kv.MetaVersion)
 		metaVal, err1 := txn.us.GetRaw(kv.Key(metaKey))
 		if err1 != nil {
-			if terror.ErrorEqual(err1, engine.ErrNotFound) {
+			if terror.ErrorEqual(err1, engine.ErrNotFound) || terror.ErrorEqual(err1, kv.ErrNotExist) {
 				txn.metas[string(metaKey)] = nil
 				return nil
 			}
 			return err1
 		}
-		if len(metaVal) % 8 != 0 {
+		if len(metaVal)%8 != 0 {
 			log.Fatal("something wrong with encode or decode meta key")
 		}
 		txn.metas[string(metaKey)] = metaVal
