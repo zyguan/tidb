@@ -73,7 +73,11 @@ func (gc *localstoreCompactor) OnDelete(k kv.Key) {
 func (gc *localstoreCompactor) getAllVersions(key kv.Key) ([]kv.EncodedKey, error) {
 	var keys []kv.EncodedKey
 	k := key
-	for ver := kv.MaxVersion; ver.Ver > 0; ver.Ver-- {
+	ver := kv.MetaVersion
+	// Skip meta key
+	// TODO: fix me
+	ver.Ver--
+	for ; ver.Ver > 0; ver.Ver-- {
 		mvccK, _, err := gc.db.Seek(MvccEncodeVersionKey(key, ver))
 		if terror.ErrorEqual(err, engine.ErrNotFound) {
 			break
@@ -174,6 +178,7 @@ func (gc *localstoreCompactor) Compact(k kv.Key) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	// TODO: handle meta key
 	filteredKeys := gc.filterExpiredKeys(keys)
 	if len(filteredKeys) > 0 {
 		log.Debugf("[kv] GC send %d keys to delete worker", len(filteredKeys))

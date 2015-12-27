@@ -80,6 +80,7 @@ type Snapshot interface {
 	BatchGet(keys []Key) (map[string][]byte, error)
 	// Release releases the snapshot to store.
 	Release()
+	GetRaw(k Key) ([]byte, error)
 }
 
 // Driver is the interface that must be implemented by a KV storage.

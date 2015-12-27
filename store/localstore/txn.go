@@ -19,6 +19,8 @@ import (
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/store/localstore/engine"
+	"github.com/pingcap/tidb/terror"
 )
 
 var (
@@ -27,7 +29,10 @@ var (
 
 // dbTxn is not thread safe
 type dbTxn struct {
-	us         kv.UnionStore
+	us kv.UnionStore
+	// meta key value pairs for dirty key in union store
+	metas map[string][]byte
+
 	store      *dbStore // for commit
 	tid        uint64
 	valid      bool
@@ -108,6 +113,12 @@ func (txn *dbTxn) Commit() error {
 		txn.close()
 	}()
 
+	err := txn.getMetaKeys()
+	if err != nil {
+		log.Error(err)
+		return err
+	}
+
 	return errors.Trace(txn.doCommit())
 }
 
@@ -131,4 +142,25 @@ func (txn *dbTxn) LockKeys(keys ...kv.Key) error {
 		txn.lockedKeys[string(key)] = struct{}{}
 	}
 	return nil
+}
+
+func (txn *dbTxn) getMetaKeys() error {
+	// TODO: allocate once
+	txn.metas = make(map[string][]byte)
+	err := txn.us.WalkBuffer(func(k kv.Key, value []byte) error {
+		metaKey := MvccEncodeVersionKey(kv.Key(k), kv.MetaVersion)
+		metaVal, err1 := txn.us.GetRaw(kv.Key(metaKey))
+		if err1 != nil {
+			if terror.ErrorEqual(err1, engine.ErrNotFound) {
+				txn.metas[string(metaKey)] = nil
+				return nil
+			}
+			return err1
+		}
+
+		txn.metas[string(metaKey)] = metaVal
+		return nil
+	})
+
+	return err
 }

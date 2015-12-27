@@ -80,6 +80,7 @@ func (t *testMvccSuite) scanRawEngine(c *C, f func([]byte, []byte)) {
 }
 
 func (t *testMvccSuite) SetUpTest(c *C) {
+
 	// create new store
 	t.s = createMemStore()
 	t.addDirtyData()

@@ -116,6 +116,10 @@ type mockSnapshot struct {
 	store MemBuffer
 }
 
+func (s *mockSnapshot) GetRaw(k Key) ([]byte, error) {
+	panic("not implementation")
+}
+
 func (s *mockSnapshot) Get(k Key) ([]byte, error) {
 	return s.store.Get(k)
 }

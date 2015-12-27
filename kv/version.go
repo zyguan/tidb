@@ -30,6 +30,8 @@ var (
 	MaxVersion = Version{Ver: math.MaxUint64}
 	// MinVersion is the minimum version, it's not a valid version, too.
 	MinVersion = Version{Ver: 0}
+	// MetaVersion is used for meta key
+	MetaVersion = Version{math.MaxUint64 - 1}
 )
 
 // NewVersion creates a new Version struct.

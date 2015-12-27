@@ -33,6 +33,7 @@ type UnionStore interface {
 	SetOption(opt Option, val interface{})
 	// DelOption deletes an option.
 	DelOption(opt Option)
+	GetRaw(k Key) ([]byte, error)
 }
 
 // Option is used for customizing kv store's behaviors during a transaction.
@@ -114,6 +115,11 @@ func (lmb *lazyMemBuffer) Release() {
 
 	p.put(lmb.mb)
 	lmb.mb = nil
+}
+
+// Get Raw key
+func (us *unionStore) GetRaw(k Key) ([]byte, error) {
+	return us.snapshot.GetRaw(k)
 }
 
 // Get implements the Retriever interface.
