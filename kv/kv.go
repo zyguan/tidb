@@ -26,6 +26,7 @@ type Retriever interface {
 	// Get gets the value for key k from kv store.
 	// If corresponding kv pair does not exist, it returns nil and ErrNotExist.
 	Get(k Key) ([]byte, error)
+
 	// Seek creates an Iterator positioned on the first entry that k <= entry's key.
 	// If such entry is not found, it returns an invalid Iterator with no error.
 	// The Iterator must be Closed after use.
@@ -80,7 +81,9 @@ type Snapshot interface {
 	BatchGet(keys []Key) (map[string][]byte, error)
 	// Release releases the snapshot to store.
 	Release()
-	GetRaw(k Key) ([]byte, error)
+
+	// GetRaw get key without  using snapshot version
+	GetRaw(k Key)([]byte, error)
 }
 
 // Driver is the interface that must be implemented by a KV storage.

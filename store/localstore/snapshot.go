@@ -91,18 +91,14 @@ func (s *dbSnapshot) mvccSeek(key kv.Key, exact bool) (kv.Key, []byte, error) {
 	}
 }
 
-func (s *dbSnapshot) GetRaw(key kv.Key) ([]byte, error) {
-	return s.store.db.Get([]byte(key))
+func (s *dbSnapshot) Get(key kv.Key) ([]byte, error) {
+	return s.store.Get([]byte(key), &s.version)
 }
 
-func (s *dbSnapshot) Get(key kv.Key) ([]byte, error) {
-	// TODO: get meta key, decode version, get version key
-	_, v, err := s.mvccSeek(key, true)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return v, nil
+func (s *dbSnapshot) GetRaw(key kv.Key) ([]byte, error) {
+	return s.store.Get([]byte(key), nil)
 }
+
 
 func (s *dbSnapshot) BatchGet(keys []kv.Key) (map[string][]byte, error) {
 	m := make(map[string][]byte)

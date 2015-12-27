@@ -66,6 +66,8 @@ type seekReply struct {
 
 type getArgs struct {
 	key []byte
+	ver kv.Version
+	isRaw bool
 }
 
 type getReply struct {
@@ -78,14 +80,21 @@ type commitReply struct {
 	err error
 }
 
-func (s *dbStore) Get(key kv.Key) ([]byte, error) {
+func (s *dbStore) Get(key kv.Key, ver *kv.Version) ([]byte, error) {
+	args := &getArgs{key: key}
 	c := &command{
 		op:   opGet,
-		args: &getArgs{key: key},
+		args:args,
 		done: make(chan error, 1),
 	}
 
-	s.commandCh <- c
+	if ver == nil {
+		args.isRaw = true
+	}else{
+		args.ver = *ver
+	}
+
+	s.getCmdCh <- c
 	err := <-c.done
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -93,7 +102,6 @@ func (s *dbStore) Get(key kv.Key) ([]byte, error) {
 
 	reply := c.reply.(*getReply)
 	return reply.value, nil
-
 }
 
 // Seek searches for the first key in the engine which is >= key in byte order, returns (nil, nil, ErrNotFound)
@@ -253,10 +261,14 @@ func (s *dbStore) handleGet(cmd *command) {
 }
 
 func (s *dbStore) doGet(cmd *command) ([]byte, error) {
-	txn := cmd.txn
 	args := cmd.args.(*getArgs)
-	metaKey := MvccEncodeVersionKey(kv.Key(args.key), kv.MetaVersion)
-	metaVal, err := txn.us.GetRaw(kv.Key(metaKey))
+	key := kv.Key(args.key)
+	if args.isRaw{
+		return s.db.Get(key)
+	}
+	curVer := args.ver
+	metaKey := MvccEncodeVersionKey(key, kv.MetaVersion)
+	metaVal, err := s.db.Get(kv.Key(metaKey))
 	if err != nil {
 		if terror.ErrorEqual(err, engine.ErrNotFound) {
 			return nil, kv.ErrNotExist
@@ -266,21 +278,21 @@ func (s *dbStore) doGet(cmd *command) ([]byte, error) {
 
 	var keyVer kv.Version
 
+	// reverse scan
 	for i := len(metaVal); i >= 8; i -= 8 {
-		log.Error(i, len(metaVal))
 		ver := decodeVersion(metaVal[i-8 : i])
-		if ver.Cmp(kv.Version{Ver: txn.tid}) < 0 {
+		if curVer.Cmp(ver) >= 0 {
 			keyVer = ver
 			break
 		}
 	}
 
 	if keyVer.Cmp(kv.MinVersion) == 0 {
+		log.Error("minver", keyVer)
 		return nil, kv.ErrNotExist
 	}
 
-	return txn.us.GetRaw(kv.Key(MvccEncodeVersionKey(kv.Key(args.key), keyVer)))
-
+	return s.db.Get(kv.Key(MvccEncodeVersionKey(key, keyVer)))
 }
 
 func (s *dbStore) doCommit(cmd *command) {

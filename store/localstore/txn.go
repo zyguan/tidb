@@ -21,8 +21,8 @@ import (
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/store/localstore/engine"
 	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/store/localstore/engine"
 )
 
 var (
@@ -66,12 +66,12 @@ func encodeVersion(ver kv.Version) []byte {
 }
 
 func decodeVersion(val []byte) kv.Version {
-	var ver kv.Version
-	err := binary.Read(bytes.NewBuffer(val), binary.BigEndian, &ver.Ver)
+	var ver uint64
+	err := binary.Read(bytes.NewBuffer(val), binary.BigEndian, &ver)
 	if err != nil {
 		log.Fatal(err)
 	}
-	return ver
+	return kv.NewVersion(ver)
 }
 
 func (txn *dbTxn) Get(k kv.Key) ([]byte, error) {
@@ -113,7 +113,8 @@ func (txn *dbTxn) doCommit() error {
 	}
 
 	err := txn.us.WalkBuffer(func(k kv.Key, v []byte) error {
-		e := txn.LockKeys(k)
+		metaKey := MvccEncodeVersionKey(kv.Key(k), kv.MetaVersion)
+		e := txn.LockKeys(kv.Key(metaKey))
 		return errors.Trace(e)
 	})
 	if err != nil {
@@ -175,6 +176,9 @@ func (txn *dbTxn) getMetaKeys() error {
 				return nil
 			}
 			return err1
+		}
+		if len(metaVal) % 8 != 0 {
+			log.Fatal("something wrong with encode or decode meta key")
 		}
 		txn.metas[string(metaKey)] = metaVal
 		return nil

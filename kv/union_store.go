@@ -33,6 +33,7 @@ type UnionStore interface {
 	SetOption(opt Option, val interface{})
 	// DelOption deletes an option.
 	DelOption(opt Option)
+
 	GetRaw(k Key) ([]byte, error)
 }
 
@@ -117,9 +118,15 @@ func (lmb *lazyMemBuffer) Release() {
 	lmb.mb = nil
 }
 
-// Get Raw key
 func (us *unionStore) GetRaw(k Key) ([]byte, error) {
-	return us.snapshot.GetRaw(k)
+	v, err := us.snapshot.GetRaw(k)
+	if err != nil {
+		return v, errors.Trace(err)
+	}
+	if len(v) == 0 {
+		return nil, errors.Trace(ErrNotExist)
+	}
+	return v, nil
 }
 
 // Get implements the Retriever interface.
@@ -135,7 +142,7 @@ func (us *unionStore) Get(k Key) ([]byte, error) {
 		}
 	}
 	if IsErrNotFound(err) {
-		v, err = us.BufferStore.r.Get(k)
+		v, err = us.snapshot.Get(k)
 	}
 	if err != nil {
 		return v, errors.Trace(err)
