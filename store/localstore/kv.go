@@ -43,6 +43,7 @@ const (
 
 const (
 	maxSeekWorkers = 3
+	maxGetWorkers  = 3
 
 	lowerWaterMark = 10 // second
 )
@@ -65,8 +66,8 @@ type seekReply struct {
 }
 
 type getArgs struct {
-	key []byte
-	ver kv.Version
+	key   []byte
+	ver   kv.Version
 	isRaw bool
 }
 
@@ -84,13 +85,13 @@ func (s *dbStore) Get(key kv.Key, ver *kv.Version) ([]byte, error) {
 	args := &getArgs{key: key}
 	c := &command{
 		op:   opGet,
-		args:args,
+		args: args,
 		done: make(chan error, 1),
 	}
 
 	if ver == nil {
 		args.isRaw = true
-	}else{
+	} else {
 		args.ver = *ver
 	}
 
@@ -140,6 +141,19 @@ func (s *dbStore) CommitTxn(txn *dbTxn) error {
 	return errors.Trace(err)
 }
 
+func (s *dbStore) getWorker(wg *sync.WaitGroup, getCh chan *command) {
+	defer wg.Done()
+	for {
+		select {
+		case cmd, ok := <-getCh:
+			if !ok {
+				return
+			}
+			s.handleGet(cmd)
+		}
+	}
+}
+
 func (s *dbStore) seekWorker(wg *sync.WaitGroup, seekCh chan *command) {
 	defer wg.Done()
 	for {
@@ -177,6 +191,13 @@ func (s *dbStore) scheduler() {
 		go s.seekWorker(wgSeekWorkers, seekCh)
 	}
 
+	getCh := make(chan *command, 1000)
+	wgGetWorkers := &sync.WaitGroup{}
+	wgGetWorkers.Add(maxSeekWorkers)
+	for i := 0; i < maxGetWorkers; i++ {
+		go s.getWorker(wgSeekWorkers, getCh)
+	}
+
 	segmentIndex := 0
 
 	tick := time.NewTicker(time.Second)
@@ -196,7 +217,7 @@ func (s *dbStore) scheduler() {
 				s.doCommit(cmd)
 			}
 		case cmd := <-s.getCmdCh:
-			s.handleGet(cmd)
+			getCh <- cmd
 		case <-s.closeCh:
 			closed = true
 			// notify seek worker to exit
@@ -263,7 +284,7 @@ func (s *dbStore) handleGet(cmd *command) {
 func (s *dbStore) doGet(cmd *command) ([]byte, error) {
 	args := cmd.args.(*getArgs)
 	key := kv.Key(args.key)
-	if args.isRaw{
+	if args.isRaw {
 		return s.db.Get(key)
 	}
 	curVer := args.ver
