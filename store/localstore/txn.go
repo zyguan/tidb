@@ -14,8 +14,6 @@
 package localstore
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 
 	"github.com/juju/errors"
@@ -57,20 +55,29 @@ func newTxn(s *dbStore, ver kv.Version) *dbTxn {
 
 // Implement transaction interface
 func encodeVersion(ver kv.Version) []byte {
-	var b bytes.Buffer
-	err := binary.Write(&b, binary.BigEndian, ver.Ver)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return b.Bytes()
+	b := make([]byte, 8)
+	bigEndianEncodeU64(b, ver.Ver)
+	return b
+}
+
+func bigEndianEncodeU64(b []byte, v uint64) {
+	b[0] = byte(v >> 56)
+	b[1] = byte(v >> 48)
+	b[2] = byte(v >> 40)
+	b[3] = byte(v >> 32)
+	b[4] = byte(v >> 24)
+	b[5] = byte(v >> 16)
+	b[6] = byte(v >> 8)
+	b[7] = byte(v)
+}
+
+func bigEndianDecodeU64(b []byte) uint64 {
+	return uint64(b[7]) | uint64(b[6])<<8 | uint64(b[5])<<16 | uint64(b[4])<<24 |
+		uint64(b[3])<<32 | uint64(b[2])<<40 | uint64(b[1])<<48 | uint64(b[0])<<56
 }
 
 func decodeVersion(val []byte) kv.Version {
-	var ver uint64
-	err := binary.Read(bytes.NewBuffer(val), binary.BigEndian, &ver)
-	if err != nil {
-		log.Fatal(err)
-	}
+	ver := bigEndianDecodeU64(val)
 	return kv.NewVersion(ver)
 }
 

@@ -89,6 +89,7 @@ type commitReply struct {
 	err error
 }
 
+// Get key with version, if ver is nil, then get raw key.
 func (s *dbStore) Get(key kv.Key, ver *kv.Version) ([]byte, error) {
 	c := &getCommand{
 		op:   opGet,
@@ -323,7 +324,6 @@ func (s *dbStore) doGet(cmd *getCommand) ([]byte, error) {
 	}
 
 	if keyVer.Cmp(kv.MinVersion) == 0 {
-		log.Error("minver", keyVer)
 		return nil, kv.ErrNotExist
 	}
 
