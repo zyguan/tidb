@@ -48,6 +48,14 @@ const (
 	lowerWaterMark = 10 // second
 )
 
+type getCommand struct {
+	op    op
+	txn   *dbTxn
+	args  getArgs
+	reply *getReply
+	done  chan error
+}
+
 type command struct {
 	op    op
 	txn   *dbTxn
@@ -82,17 +90,17 @@ type commitReply struct {
 }
 
 func (s *dbStore) Get(key kv.Key, ver *kv.Version) ([]byte, error) {
-	args := &getArgs{key: key}
-	c := &command{
+	c := &getCommand{
 		op:   opGet,
-		args: args,
 		done: make(chan error, 1),
 	}
 
+	c.args.key = key
+
 	if ver == nil {
-		args.isRaw = true
+		c.args.isRaw = true
 	} else {
-		args.ver = *ver
+		c.args.ver = *ver
 	}
 
 	s.getCmdCh <- c
@@ -101,7 +109,7 @@ func (s *dbStore) Get(key kv.Key, ver *kv.Version) ([]byte, error) {
 		return nil, errors.Trace(err)
 	}
 
-	reply := c.reply.(*getReply)
+	reply := c.reply
 	return reply.value, nil
 }
 
@@ -141,7 +149,7 @@ func (s *dbStore) CommitTxn(txn *dbTxn) error {
 	return errors.Trace(err)
 }
 
-func (s *dbStore) getWorker(wg *sync.WaitGroup, getCh chan *command) {
+func (s *dbStore) getWorker(wg *sync.WaitGroup, getCh chan *getCommand) {
 	defer wg.Done()
 	for {
 		select {
@@ -191,7 +199,7 @@ func (s *dbStore) scheduler() {
 		go s.seekWorker(wgSeekWorkers, seekCh)
 	}
 
-	getCh := make(chan *command, 1000)
+	getCh := make(chan *getCommand, 1000)
 	wgGetWorkers := &sync.WaitGroup{}
 	wgGetWorkers.Add(maxSeekWorkers)
 	for i := 0; i < maxGetWorkers; i++ {
@@ -279,7 +287,7 @@ func (s *dbStore) tryLock(txn *dbTxn) (err error) {
 	return nil
 }
 
-func (s *dbStore) handleGet(cmd *command) {
+func (s *dbStore) handleGet(cmd *getCommand) {
 	r := &getReply{}
 	var err error
 	r.value, err = s.doGet(cmd)
@@ -287,8 +295,8 @@ func (s *dbStore) handleGet(cmd *command) {
 	cmd.done <- err
 }
 
-func (s *dbStore) doGet(cmd *command) ([]byte, error) {
-	args := cmd.args.(*getArgs)
+func (s *dbStore) doGet(cmd *getCommand) ([]byte, error) {
+	args := cmd.args
 	key := kv.Key(args.key)
 	if args.isRaw {
 		return s.db.Get(key)
@@ -392,7 +400,7 @@ type dbStore struct {
 	wg            *sync.WaitGroup
 
 	commandCh chan *command
-	getCmdCh  chan *command
+	getCmdCh  chan *getCommand
 	closeCh   chan struct{}
 
 	mu     sync.Mutex
@@ -461,7 +469,7 @@ func (d Driver) Open(path string) (kv.Storage, error) {
 		db:         db,
 		compactor:  newLocalCompactor(localCompactDefaultPolicy, db),
 		commandCh:  make(chan *command, 1000),
-		getCmdCh:   make(chan *command, 1000),
+		getCmdCh:   make(chan *getCommand, 1000),
 		closed:     false,
 		closeCh:    make(chan struct{}),
 		wg:         &sync.WaitGroup{},
