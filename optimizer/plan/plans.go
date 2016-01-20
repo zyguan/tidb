@@ -31,12 +31,43 @@ type TableScan struct {
 	Table  *model.TableInfo
 	Desc   bool
 	Ranges []TableRange
+
+	// AccessConditions can be used to build index range.
+	AccessConditions []ast.ExprNode
+
+	// FilterConditions can be used to filter result.
+	FilterConditions []ast.ExprNode
 }
 
 // Accept implements Plan Accept interface.
 func (p *TableScan) Accept(v Visitor) (Plan, bool) {
 	np, _ := v.Enter(p)
 	return v.Leave(np)
+}
+
+// ShowDDL is for showing DDL information.
+type ShowDDL struct {
+	basePlan
+}
+
+// Accept implements Plan Accept interface.
+func (p *ShowDDL) Accept(v Visitor) (Plan, bool) {
+	np, _ := v.Enter(p)
+	return v.Leave(np)
+}
+
+// CheckTable is for checking table data.
+type CheckTable struct {
+	basePlan
+
+	Tables []*ast.TableName
+}
+
+// Accept implements Plan Accept interface.
+func (p *CheckTable) Accept(v Visitor) (Plan, bool) {
+	np, _ := v.Enter(p)
+	return v.Leave(np)
+
 }
 
 type bound int
@@ -93,44 +124,18 @@ type IndexScan struct {
 
 	// Desc indicates whether the index should be scanned in descending order.
 	Desc bool
+
+	// AccessConditions can be used to build index range.
+	AccessConditions []ast.ExprNode
+
+	// FilterConditions can be used to filter result.
+	FilterConditions []ast.ExprNode
 }
 
 // Accept implements Plan Accept interface.
 func (p *IndexScan) Accept(v Visitor) (Plan, bool) {
 	np, _ := v.Enter(p)
 	return v.Leave(np)
-}
-
-// Filter represents a filter plan.
-type Filter struct {
-	planWithSrc
-
-	// Originally the WHERE or ON condition is parsed into a single expression,
-	// but after we converted to CNF(Conjunctive normal form), it can be
-	// split into a list of AND conditions.
-	Conditions []ast.ExprNode
-}
-
-// Accept implements Plan Accept interface.
-func (p *Filter) Accept(v Visitor) (Plan, bool) {
-	np, skip := v.Enter(p)
-	if skip {
-		v.Leave(np)
-	}
-	p = np.(*Filter)
-	var ok bool
-	p.src, ok = p.src.Accept(v)
-	if !ok {
-		return p, false
-	}
-	return v.Leave(p)
-}
-
-// SetLimit implements Plan SetLimit interface.
-func (p *Filter) SetLimit(limit float64) {
-	p.limit = limit
-	// We assume 50% of the src row is filtered out.
-	p.src.SetLimit(limit * 2)
 }
 
 // SelectLock represents a select lock plan.
@@ -196,10 +201,6 @@ type Sort struct {
 	planWithSrc
 
 	ByItems []*ast.ByItem
-	// If the source is already in the same order, the sort process can be by passed.
-	// It depends on the Src plan, so if the Src plan has been modified, Bypass needs
-	// to be recalculated.
-	Bypass bool
 }
 
 // Accept implements Plan Accept interface.
@@ -222,9 +223,6 @@ func (p *Sort) Accept(v Visitor) (Plan, bool) {
 // Bypass has to be determined before this get called.
 func (p *Sort) SetLimit(limit float64) {
 	p.limit = limit
-	if p.Bypass {
-		p.src.SetLimit(limit)
-	}
 }
 
 // Limit represents offset and limit plan.
@@ -310,4 +308,36 @@ func (p *Deallocate) Accept(v Visitor) (Plan, bool) {
 	}
 	p = np.(*Deallocate)
 	return v.Leave(p)
+}
+
+// Aggregate represents a select fields plan.
+type Aggregate struct {
+	planWithSrc
+	AggFuncs     []*ast.AggregateFuncExpr
+	GroupByItems []*ast.ByItem
+}
+
+// Accept implements Plan Accept interface.
+func (p *Aggregate) Accept(v Visitor) (Plan, bool) {
+	np, skip := v.Enter(p)
+	if skip {
+		v.Leave(np)
+	}
+	p = np.(*Aggregate)
+	if p.src != nil {
+		var ok bool
+		p.src, ok = p.src.Accept(v)
+		if !ok {
+			return p, false
+		}
+	}
+	return v.Leave(p)
+}
+
+// SetLimit implements Plan SetLimit interface.
+func (p *Aggregate) SetLimit(limit float64) {
+	p.limit = limit
+	if p.src != nil {
+		p.src.SetLimit(limit)
+	}
 }

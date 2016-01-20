@@ -20,23 +20,31 @@ import (
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/column"
 	"github.com/pingcap/tidb/context"
+	"github.com/pingcap/tidb/inspectkv"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/optimizer/evaluator"
 	"github.com/pingcap/tidb/optimizer/plan"
+	"github.com/pingcap/tidb/sessionctx"
+	"github.com/pingcap/tidb/sessionctx/db"
 	"github.com/pingcap/tidb/sessionctx/forupdate"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/table/tables"
 	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/util/types"
 )
 
 var (
+	_ Executor = &AggregateExec{}
+	_ Executor = &CheckTableExec{}
 	_ Executor = &FilterExec{}
 	_ Executor = &IndexRangeExec{}
 	_ Executor = &IndexScanExec{}
 	_ Executor = &LimitExec{}
 	_ Executor = &SelectFieldsExec{}
 	_ Executor = &SelectLockExec{}
+	_ Executor = &ShowDDLExec{}
 	_ Executor = &SortExec{}
 	_ Executor = &TableScanExec{}
 )
@@ -52,11 +60,11 @@ var (
 
 // Error codes.
 const (
-	CodeUnknownPlan terror.ErrCode = iota + 1
-	CodePrepareMulti
-	CodeStmtNotFound
-	CodeSchemaChanged
-	CodeWrongParamCount
+	CodeUnknownPlan     terror.ErrCode = 1
+	CodePrepareMulti    terror.ErrCode = 2
+	CodeStmtNotFound    terror.ErrCode = 3
+	CodeSchemaChanged   terror.ErrCode = 4
+	CodeWrongParamCount terror.ErrCode = 5
 )
 
 // Row represents a record row.
@@ -81,6 +89,107 @@ type Executor interface {
 	Fields() []*ast.ResultField
 	Next() (*Row, error)
 	Close() error
+}
+
+// ShowDDLExec represents a show DDL executor.
+type ShowDDLExec struct {
+	fields []*ast.ResultField
+	ctx    context.Context
+	done   bool
+}
+
+// Fields implements Executor Fields interface.
+func (e *ShowDDLExec) Fields() []*ast.ResultField {
+	return e.fields
+}
+
+// Next implements Execution Next interface.
+func (e *ShowDDLExec) Next() (*Row, error) {
+	if e.done {
+		return nil, nil
+	}
+
+	txn, err := e.ctx.GetTxn(false)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	info, err := inspectkv.GetDDLInfo(txn)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	rowData := []interface{}{
+		info.SchemaVer,
+		"",
+		"",
+	}
+	if info.Owner != nil {
+		rowData[1] = info.Owner.String()
+	}
+	if info.Job != nil {
+		rowData[2] = info.Job.String()
+	}
+	row := &Row{}
+	row.Data = rowData
+	for i, f := range e.fields {
+		f.Expr.SetValue(rowData[i])
+	}
+	e.done = true
+
+	return row, nil
+}
+
+// Close implements Executor Close interface.
+func (e *ShowDDLExec) Close() error {
+	return nil
+}
+
+// CheckTableExec represents a check table executor.
+type CheckTableExec struct {
+	tables []*ast.TableName
+	ctx    context.Context
+	done   bool
+}
+
+// Fields implements Executor Fields interface.
+func (e *CheckTableExec) Fields() []*ast.ResultField {
+	return nil
+}
+
+// Next implements Execution Next interface.
+func (e *CheckTableExec) Next() (*Row, error) {
+	if e.done {
+		return nil, nil
+	}
+
+	dbName := model.NewCIStr(db.GetCurrentSchema(e.ctx))
+	is := sessionctx.GetDomain(e.ctx).InfoSchema()
+	txn, err := e.ctx.GetTxn(false)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	for _, t := range e.tables {
+		tb, err := is.TableByName(dbName, t.Name)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		for _, idx := range tb.Indices() {
+			err = inspectkv.CompareIndexData(txn, tb, idx)
+			if err != nil {
+				return nil, errors.Errorf("%v err:%v", t.Name, err)
+			}
+		}
+	}
+	e.done = true
+
+	return nil, nil
+}
+
+// Close implements plan.Plan Close interface.
+func (e *CheckTableExec) Close() error {
+	return nil
 }
 
 // TableScanExec represents a table scan executor.
@@ -202,7 +311,7 @@ func (e *TableScanExec) getRow(handle int64, rowKey kv.Key) (*Row, error) {
 	return row, nil
 }
 
-// Close implements plan.Plan Close interface.
+// Close implements Executor Close interface.
 func (e *TableScanExec) Close() error {
 	if e.iter != nil {
 		e.iter.Close()
@@ -692,4 +801,130 @@ func (e *SortExec) Next() (*Row, error) {
 // Close implements Executor Close interface.
 func (e *SortExec) Close() error {
 	return e.Src.Close()
+}
+
+// For select stmt with aggregate function but without groupby clasue,
+// We consider there is a single group with key singleGroup.
+const singleGroup = "SingleGroup"
+
+// AggregateExec deals with all the aggregate functions.
+// It is built from Aggregate Plan. When Next() is called, it reads all the data from Src and updates all the items in AggFuncs.
+// TODO: Support having.
+type AggregateExec struct {
+	Src               Executor
+	ResultFields      []*ast.ResultField
+	executed          bool
+	ctx               context.Context
+	finish            bool
+	AggFuncs          []*ast.AggregateFuncExpr
+	groupMap          map[string]bool
+	groups            []string
+	currentGroupIndex int
+	GroupByItems      []*ast.ByItem
+}
+
+// Fields implements Executor Fields interface.
+func (e *AggregateExec) Fields() []*ast.ResultField {
+	return e.ResultFields
+}
+
+// Next implements Executor Next interface.
+func (e *AggregateExec) Next() (*Row, error) {
+	// In this stage we consider all data from src as a single group.
+	if !e.executed {
+		e.groupMap = make(map[string]bool)
+		e.groups = []string{}
+		for {
+			hasMore, err := e.innerNext()
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			if !hasMore {
+				break
+			}
+		}
+		e.executed = true
+		if (len(e.groups) == 0) && (len(e.GroupByItems) == 0) {
+			// If no groupby and no data, we should add an empty group.
+			// For example:
+			// "select count(c) from t;" should return one row [0]
+			// "select count(c) from t group by c1;" should return empty result set.
+			e.groups = append(e.groups, singleGroup)
+		}
+	}
+	if e.currentGroupIndex >= len(e.groups) {
+		return nil, nil
+	}
+	groupKey := e.groups[e.currentGroupIndex]
+	for _, af := range e.AggFuncs {
+		af.CurrentGroup = groupKey
+	}
+	e.currentGroupIndex++
+	return &Row{}, nil
+}
+
+func (e *AggregateExec) getGroupKey() (string, error) {
+	if len(e.GroupByItems) == 0 {
+		return singleGroup, nil
+	}
+	vals := make([]interface{}, 0, len(e.GroupByItems))
+	for _, item := range e.GroupByItems {
+		v, err := evaluator.Eval(e.ctx, item.Expr)
+		if err != nil {
+			return "", errors.Trace(err)
+		}
+		vals = append(vals, v)
+	}
+	bs, err := codec.EncodeValue([]byte{}, vals...)
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	return string(bs), nil
+}
+
+// Fetch a single row from src and update each aggregate function.
+// If the first return value is false, it means there is no more data from src.
+func (e *AggregateExec) innerNext() (bool, error) {
+	if e.Src != nil {
+		srcRow, err := e.Src.Next()
+		if err != nil {
+			return false, errors.Trace(err)
+		}
+		if srcRow == nil {
+			return false, nil
+		}
+	} else {
+		// If Src is nil, only one row should be returned.
+		if e.executed {
+			return false, nil
+		}
+	}
+	e.executed = true
+	groupKey, err := e.getGroupKey()
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+	if _, ok := e.groupMap[groupKey]; !ok {
+		e.groupMap[groupKey] = true
+		e.groups = append(e.groups, groupKey)
+	}
+	for _, af := range e.AggFuncs {
+		for _, arg := range af.Args {
+			_, err := evaluator.Eval(e.ctx, arg)
+			if err != nil {
+				return false, errors.Trace(err)
+			}
+		}
+		af.CurrentGroup = groupKey
+		af.Update()
+	}
+	return true, nil
+}
+
+// Close implements Executor Close interface.
+func (e *AggregateExec) Close() error {
+	if e.Src != nil {
+		return e.Src.Close()
+	}
+	return nil
 }

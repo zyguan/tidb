@@ -76,6 +76,7 @@ var Funcs = map[string]Func{
 	"curtime":           {builtinCurrentTime, 0, 1, false, false},
 	"date":              {builtinDate, 1, 1, true, false},
 	"day":               {builtinDay, 1, 1, true, false},
+	"dayname":           {builtinDayName, 1, 1, true, false},
 	"dayofmonth":        {builtinDayOfMonth, 1, 1, true, false},
 	"dayofweek":         {builtinDayOfWeek, 1, 1, true, false},
 	"dayofyear":         {builtinDayOfYear, 1, 1, true, false},
@@ -113,6 +114,7 @@ var Funcs = map[string]Func{
 	"found_rows":    {builtinFoundRows, 0, 0, false, false},
 	"user":          {builtinUser, 0, 0, false, false},
 	"connection_id": {builtinConnectionID, 0, 0, true, false},
+	"version":       {builtinVersion, 0, 0, true, false},
 }
 
 func invArg(arg interface{}, s string) error {

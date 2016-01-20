@@ -14,7 +14,11 @@
 package ast
 
 import (
+	"strings"
+
+	"github.com/juju/errors"
 	"github.com/pingcap/tidb/model"
+	"github.com/pingcap/tidb/util/distinct"
 	"github.com/pingcap/tidb/util/types"
 )
 
@@ -245,11 +249,13 @@ func (n *FuncLocateExpr) Accept(v Visitor) (Node, bool) {
 		return n, false
 	}
 	n.SubStr = node.(ExprNode)
-	node, ok = n.Pos.Accept(v)
-	if !ok {
-		return n, false
+	if n.Pos != nil {
+		node, ok = n.Pos.Accept(v)
+		if !ok {
+			return n, false
+		}
+		n.Pos = node.(ExprNode)
 	}
-	n.Pos = node.(ExprNode)
 	return v.Leave(n)
 }
 
@@ -353,6 +359,17 @@ func (n *FuncDateArithExpr) Accept(v Visitor) (Node, bool) {
 	return v.Leave(n)
 }
 
+const (
+	// AggFuncCount is the name of Count function.
+	AggFuncCount = "count"
+	// AggFuncSum is the name of Sum function.
+	AggFuncSum = "sum"
+	// AggFuncAvg is the name of Avg function.
+	AggFuncAvg = "avg"
+	// AggFuncFirstRow is the name of FirstRowColumn function.
+	AggFuncFirstRow = "firstrow"
+)
+
 // AggregateFuncExpr represents aggregate function expression.
 type AggregateFuncExpr struct {
 	funcNode
@@ -364,6 +381,11 @@ type AggregateFuncExpr struct {
 	// For example, column c1 values are "1", "2", "2",  "sum(c1)" is "5",
 	// but "sum(distinct c1)" is "3".
 	Distinct bool
+
+	CurrentGroup string
+	// contextPerGroupMap is used to store aggregate evaluation context.
+	// Each entry for a group.
+	contextPerGroupMap map[string](*AggEvaluateContext)
 }
 
 // Accept implements Node Accept interface.
@@ -381,4 +403,124 @@ func (n *AggregateFuncExpr) Accept(v Visitor) (Node, bool) {
 		n.Args[i] = node.(ExprNode)
 	}
 	return v.Leave(n)
+}
+
+// Update is used for update aggregate context.
+func (n *AggregateFuncExpr) Update() error {
+	name := strings.ToLower(n.F)
+	switch name {
+	case AggFuncCount:
+		return n.updateCount()
+	case AggFuncFirstRow:
+		return n.updateFirstRow()
+	}
+	return nil
+}
+
+// GetContext gets aggregate evaluation context for the current group.
+// If it is nil, add a new context into contextPerGroupMap.
+func (n *AggregateFuncExpr) GetContext() *AggEvaluateContext {
+	if n.contextPerGroupMap == nil {
+		n.contextPerGroupMap = make(map[string](*AggEvaluateContext))
+	}
+	if _, ok := n.contextPerGroupMap[n.CurrentGroup]; !ok {
+		c := &AggEvaluateContext{}
+		if n.Distinct {
+			c.distinctChecker = distinct.CreateDistinctChecker()
+		}
+		n.contextPerGroupMap[n.CurrentGroup] = c
+	}
+	return n.contextPerGroupMap[n.CurrentGroup]
+}
+
+func (n *AggregateFuncExpr) updateCount() error {
+	ctx := n.GetContext()
+	vals := make([]interface{}, 0, len(n.Args))
+	for _, a := range n.Args {
+		value := a.GetValue()
+		if value == nil {
+			return nil
+		}
+		vals = append(vals, value)
+	}
+	if n.Distinct {
+		d, err := ctx.distinctChecker.Check(vals)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if !d {
+			return nil
+		}
+	}
+	ctx.Count++
+	return nil
+}
+
+func (n *AggregateFuncExpr) updateFirstRow() error {
+	ctx := n.GetContext()
+	if ctx.evaluated {
+		return nil
+	}
+	if len(n.Args) != 1 {
+		return errors.New("Wrong number of args for AggFuncFirstRow")
+	}
+	ctx.Value = n.Args[0].GetValue()
+	ctx.evaluated = true
+	return nil
+}
+
+// AggregateFuncExtractor visits Expr tree.
+// It converts ColunmNameExpr to AggregateFuncExpr and collects AggregateFuncExpr.
+type AggregateFuncExtractor struct {
+	inAggregateFuncExpr bool
+	// AggFuncs is the collected AggregateFuncExprs.
+	AggFuncs   []*AggregateFuncExpr
+	extracting bool
+}
+
+// Enter implements Visitor interface.
+func (a *AggregateFuncExtractor) Enter(n Node) (node Node, skipChildren bool) {
+	switch n.(type) {
+	case *AggregateFuncExpr:
+		a.inAggregateFuncExpr = true
+	case *SelectStmt, *InsertStmt, *DeleteStmt, *UpdateStmt:
+		// Enter a new context, skip it.
+		// For example: select sum(c) + c + exists(select c from t) from t;
+		if a.extracting {
+			return n, true
+		}
+	}
+	a.extracting = true
+	return n, false
+}
+
+// Leave implements Visitor interface.
+func (a *AggregateFuncExtractor) Leave(n Node) (node Node, ok bool) {
+	switch v := n.(type) {
+	case *AggregateFuncExpr:
+		a.inAggregateFuncExpr = false
+		a.AggFuncs = append(a.AggFuncs, v)
+	case *ColumnNameExpr:
+		// compose new AggregateFuncExpr
+		if !a.inAggregateFuncExpr {
+			// For example: select sum(c) + c from t;
+			// The c in sum() should be evaluated for each row.
+			// The c after plus should be evaluated only once.
+			agg := &AggregateFuncExpr{
+				F:    AggFuncFirstRow,
+				Args: []ExprNode{v},
+			}
+			a.AggFuncs = append(a.AggFuncs, agg)
+			return agg, true
+		}
+	}
+	return n, true
+}
+
+// AggEvaluateContext is used to store intermediate result when caculation aggregate functions.
+type AggEvaluateContext struct {
+	distinctChecker *distinct.Checker
+	Count           int64
+	Value           interface{}
+	evaluated       bool
 }
