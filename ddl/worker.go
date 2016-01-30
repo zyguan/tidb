@@ -57,15 +57,19 @@ func (d *ddl) startJob(ctx context.Context, job *model.Job) error {
 
 	var historyJob *model.Job
 
-	// for a job from start to end, the state of it will be none -> delete only -> write only -> reorganization -> public
-	// for every state change, we will wait as lease 2 * lease time, so here the ticker check is 10 * lease.
-	ticker := time.NewTicker(chooseLeaseTime(10*d.lease, 10*time.Second))
+	// For a job from start to end, the state of it will be `none -> delete only -> write only -> reorganization -> public`
+	// For every state change, we will wait at least `2 * lease time`, so here the ticker check is `10 * lease`.
+	checkTime := chooseLeaseTime(10*d.lease, 10*time.Second)
+	ticker := time.NewTicker(checkTime)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-d.jobDoneCh:
 		case <-ticker.C:
 		}
+
+		log.Warnf("[ddl] job %d is running two long time - %v", jobID, checkTime)
 
 		historyJob, err = d.getHistoryJob(jobID)
 		if err != nil {
@@ -118,9 +122,9 @@ func (d *ddl) checkOwner(t *meta.Meta) (*model.Owner, error) {
 	}
 
 	now := time.Now().UnixNano()
-	// we must wait 2 * lease time to guarantee other servers update the schema,
-	// the owner will update its owner status every 2 * lease time, so here we use
-	// 4 * lease to check its timeout.
+	// We must wait `2 * lease` time to guarantee other servers update the schema,
+	// the owner will update its owner status every `2 * lease` time, so here we use
+	// `4 * lease` to check its timeout.
 	maxTimeout := int64(4 * d.lease)
 	if owner.OwnerID == d.uuid || now-owner.LastUpdateTS > maxTimeout {
 		owner.OwnerID = d.uuid
@@ -196,10 +200,10 @@ func (d *ddl) handleJobQueue() error {
 			}
 
 			if job.IsRunning() {
-				// if we enter a new state, crash when waiting 2 * lease time, and restart quickly,
-				// we may run the job immediately again, but we don't wait enough 2 * lease time to
+				// If we enter a new state, crash when waiting `2 * lease` time, and restart quickly,
+				// we may run the job immediately again, but we don't wait enough `2 * lease` time to
 				// let other servers update the schema.
-				// so here we must check the elapsed time from last update, if < 2 * lease, we must
+				// So here we must check the elapsed time from last update, if less than `2 * lease`, we must
 				// wait again.
 				elapsed := time.Duration(time.Now().UnixNano() - job.LastUpdateTS)
 				if elapsed > 0 && elapsed < waitTime {
@@ -213,7 +217,7 @@ func (d *ddl) handleJobQueue() error {
 
 			d.hook.OnJobRunBefore(job)
 
-			// if run job meets error, we will save this error in job Error
+			// If run job meets error, we will save this error in job Error
 			// and retry later if the job is not cancelled.
 			d.runJob(t, job)
 
@@ -227,8 +231,8 @@ func (d *ddl) handleJobQueue() error {
 				return errors.Trace(err)
 			}
 
-			// running job may cost some time, so here we must update owner status to
-			// prevent other become the owner.
+			// Running job may cost some time, so here we must update owner status to
+			// prevent other server become the owner.
 			owner.LastUpdateTS = time.Now().UnixNano()
 			if err = t.SetDDLOwner(owner); err != nil {
 				return errors.Trace(err)
@@ -245,8 +249,8 @@ func (d *ddl) handleJobQueue() error {
 
 		d.hook.OnJobUpdated(job)
 
-		// here means the job enters another state (delete only, write only, public, etc...) or is cancelled.
-		// if the job is done or still running, we will wait 2 * lease time to guarantee other servers to update
+		// Here means the job enters another state (delete only, write only, public, etc...) or is cancelled.
+		// If the job is done or still running, we will wait `2 * lease` time to guarantee other servers to update
 		// the newest schema.
 		if job.State == model.JobRunning || job.State == model.JobDone {
 			d.waitSchemaChanged(waitTime)
@@ -271,8 +275,8 @@ func chooseLeaseTime(n1 time.Duration, n2 time.Duration) time.Duration {
 func (d *ddl) onWorker() {
 	defer d.wait.Done()
 
-	// we use 4 * lease time to check owner's timeout, so here, we will update owner's status
-	// every 2 * lease time, if lease is 0, we will use default 10s.
+	// We use `4 * lease` time to check owner's timeout, so here, we will update owner's status
+	// every `2 * lease` time, if lease is 0, we will use default 10s.
 	checkTime := chooseLeaseTime(2*d.lease, 10*time.Second)
 
 	ticker := time.NewTicker(checkTime)
@@ -320,7 +324,7 @@ func (d *ddl) runJob(t *meta.Meta, job *model.Job) {
 	case model.ActionDropIndex:
 		err = d.onDropIndex(t, job)
 	default:
-		// invalid job, cancel it.
+		// Invalid job, cancel it.
 		job.State = model.JobCancelled
 		err = errors.Errorf("invalid job %v", job)
 	}
@@ -337,7 +341,7 @@ func (d *ddl) runJob(t *meta.Meta, job *model.Job) {
 	}
 }
 
-// for every lease seconds, we will re-update the whole schema, so we will wait 2 * lease time
+// For every lease seconds, we will re-update the whole schema, so we will wait `2 * lease` time
 // to guarantee that all servers have already updated schema.
 func (d *ddl) waitSchemaChanged(waitTime time.Duration) {
 	if waitTime == 0 {
