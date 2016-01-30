@@ -199,20 +199,6 @@ func (d *ddl) handleJobQueue() error {
 				return errors.Trace(err)
 			}
 
-			if job.IsRunning() {
-				// If we enter a new state, crash when waiting `2 * lease` time, and restart quickly,
-				// we may run the job immediately again, but we don't wait enough `2 * lease` time to
-				// let other servers update the schema.
-				// So here we must check the elapsed time from last update, if less than `2 * lease`, we must
-				// wait again.
-				elapsed := time.Duration(time.Now().UnixNano() - job.LastUpdateTS)
-				if elapsed > 0 && elapsed < waitTime {
-					log.Warnf("[ddl] the elapsed time from last update is %s < %s, wait again", elapsed, waitTime)
-					waitTime -= elapsed
-					return nil
-				}
-			}
-
 			log.Warnf("[ddl] run DDL job %v", job)
 
 			d.hook.OnJobRunBefore(job)
