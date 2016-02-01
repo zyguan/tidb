@@ -14,6 +14,7 @@
 package plan
 
 import (
+	"fmt"
 	"github.com/pingcap/tidb/ast"
 	"github.com/pingcap/tidb/model"
 )
@@ -136,6 +137,62 @@ type IndexScan struct {
 func (p *IndexScan) Accept(v Visitor) (Plan, bool) {
 	np, _ := v.Enter(p)
 	return v.Leave(np)
+}
+
+// JoinOuter represents outer join plan.
+type JoinOuter struct {
+	basePlan
+
+	Outer Plan
+	Inner Plan
+}
+
+// Accept implements Plan interface.
+func (p *JoinOuter) Accept(v Visitor) (Plan, bool) {
+	np, skip := v.Enter(p)
+	if skip {
+		v.Leave(np)
+	}
+	p = np.(*JoinOuter)
+	var ok bool
+	p.Outer, ok = p.Outer.Accept(v)
+	if !ok {
+		return p, false
+	}
+	p.Inner, ok = p.Inner.Accept(v)
+	if !ok {
+		return p, false
+	}
+	return v.Leave(p)
+}
+
+// JoinInner represents inner join plan.
+type JoinInner struct {
+	basePlan
+
+	Inners     []Plan
+	Conditions []ast.ExprNode
+}
+
+func (p *JoinInner) String() string {
+	return fmt.Sprintf("JoinInner()")
+}
+
+// Accept implements Plan interface.
+func (p *JoinInner) Accept(v Visitor) (Plan, bool) {
+	np, skip := v.Enter(p)
+	if skip {
+		v.Leave(np)
+	}
+	p = np.(*JoinInner)
+	for i, in := range p.Inners {
+		x, ok := in.Accept(v)
+		if !ok {
+			return p, false
+		}
+		p.Inners[i] = x
+	}
+	return v.Leave(p)
 }
 
 // SelectLock represents a select lock plan.
@@ -340,4 +397,37 @@ func (p *Aggregate) SetLimit(limit float64) {
 	if p.src != nil {
 		p.src.SetLimit(limit)
 	}
+}
+
+// Having represents a having plan.
+// The having plan should after aggregate plan.
+type Having struct {
+	planWithSrc
+
+	// Originally the WHERE or ON condition is parsed into a single expression,
+	// but after we converted to CNF(Conjunctive normal form), it can be
+	// split into a list of AND conditions.
+	Conditions []ast.ExprNode
+}
+
+// Accept implements Plan Accept interface.
+func (p *Having) Accept(v Visitor) (Plan, bool) {
+	np, skip := v.Enter(p)
+	if skip {
+		v.Leave(np)
+	}
+	p = np.(*Having)
+	var ok bool
+	p.src, ok = p.src.Accept(v)
+	if !ok {
+		return p, false
+	}
+	return v.Leave(p)
+}
+
+// SetLimit implements Plan SetLimit interface.
+func (p *Having) SetLimit(limit float64) {
+	p.limit = limit
+	// We assume 50% of the src row is filtered out.
+	p.src.SetLimit(limit * 2)
 }

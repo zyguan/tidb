@@ -48,6 +48,7 @@ func BuildPlan(node ast.Node) (Plan, error) {
 type planBuilder struct {
 	err    error
 	hasAgg bool
+	obj    interface{}
 }
 
 func (b *planBuilder) build(node ast.Node) Plan {
@@ -75,6 +76,18 @@ func (b *planBuilder) detectSelectAgg(sel *ast.SelectStmt) bool {
 	for _, f := range sel.GetResultFields() {
 		if ast.HasAggFlag(f.Expr) {
 			return true
+		}
+	}
+	if sel.Having != nil {
+		if ast.HasAggFlag(sel.Having.Expr) {
+			return true
+		}
+	}
+	if sel.OrderBy != nil {
+		for _, item := range sel.OrderBy.Items {
+			if ast.HasAggFlag(item.Expr) {
+				return true
+			}
 		}
 	}
 	return false
@@ -112,6 +125,15 @@ func (b *planBuilder) extractSelectAgg(sel *ast.SelectStmt) []*ast.AggregateFunc
 		res = append(res, nf)
 	}
 	sel.SetResultFields(res)
+	// Extract agg funcs from having clause.
+	if sel.Having != nil {
+		n, ok := sel.Having.Expr.Accept(extractor)
+		if !ok {
+			b.err = errors.New("Failed to extract agg expr from having clause")
+			return nil
+		}
+		sel.Having.Expr = n.(ast.ExprNode)
+	}
 	// Extract agg funcs from orderby clause.
 	if sel.OrderBy != nil {
 		for _, item := range sel.OrderBy.Items {
@@ -121,9 +143,14 @@ func (b *planBuilder) extractSelectAgg(sel *ast.SelectStmt) []*ast.AggregateFunc
 				return nil
 			}
 			item.Expr = n.(ast.ExprNode)
+			// If item is PositionExpr, we need to rebind it.
+			// For PositionExpr will refer to a ResultField in fieldlist.
+			// After extract AggExpr from fieldlist, it may be changed (See the code above).
+			if pe, ok := item.Expr.(*ast.PositionExpr); ok {
+				pe.Refer = sel.GetResultFields()[pe.N-1]
+			}
 		}
 	}
-	// TODO: extract aggfuncs from having clause.
 	return extractor.AggFuncs
 }
 
@@ -135,7 +162,7 @@ func (b *planBuilder) buildSelect(sel *ast.SelectStmt) Plan {
 	}
 	var p Plan
 	if sel.From != nil {
-		p = b.buildJoin(sel)
+		p = b.buildFrom(sel)
 		if b.err != nil {
 			return nil
 		}
@@ -161,6 +188,12 @@ func (b *planBuilder) buildSelect(sel *ast.SelectStmt) Plan {
 			return nil
 		}
 	}
+	if sel.Having != nil {
+		p = b.buildHaving(p, sel.Having)
+		if b.err != nil {
+			return nil
+		}
+	}
 	if sel.OrderBy != nil && !matchOrder(p, sel.OrderBy.Items) {
 		p = b.buildSort(p, sel.OrderBy.Items)
 		if b.err != nil {
@@ -176,12 +209,16 @@ func (b *planBuilder) buildSelect(sel *ast.SelectStmt) Plan {
 	return p
 }
 
-func (b *planBuilder) buildJoin(sel *ast.SelectStmt) Plan {
+func (b *planBuilder) buildFrom(sel *ast.SelectStmt) Plan {
 	from := sel.From.TableRefs
-	if from.Right != nil {
-		b.err = ErrUnsupportedType.Gen("Only support single table for now.")
-		return nil
+	if from.Right == nil {
+		return b.buildSingleTable(sel)
 	}
+	return b.buildJoin(sel)
+}
+
+func (b *planBuilder) buildSingleTable(sel *ast.SelectStmt) Plan {
+	from := sel.From.TableRefs
 	ts, ok := from.Left.(*ast.TableSource)
 	if !ok {
 		b.err = ErrUnsupportedType.Gen("Unsupported type %T", from.Left)
@@ -316,6 +353,15 @@ func (b *planBuilder) buildAggregate(src Plan, aggFuncs []*ast.AggregateFuncExpr
 		aggPlan.GroupByItems = groupby.Items
 	}
 	return aggPlan
+}
+
+func (b *planBuilder) buildHaving(src Plan, having *ast.HavingClause) Plan {
+	p := &Having{
+		Conditions: splitWhere(having.Expr),
+	}
+	p.SetSrc(src)
+	p.SetFields(src.Fields())
+	return p
 }
 
 func (b *planBuilder) buildSort(src Plan, byItems []*ast.ByItem) Plan {
@@ -453,6 +499,10 @@ func matchOrder(p Plan, items []*ast.ByItem) bool {
 		if mysql.HasPriKeyFlag(refer.Column.Flag) {
 			return true
 		}
+		return false
+	case *JoinOuter:
+		return false
+	case *JoinInner:
 		return false
 	case *Sort:
 		// Sort plan should not be checked here as there should only be one sort plan in a plan tree.

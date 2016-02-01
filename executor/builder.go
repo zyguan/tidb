@@ -53,8 +53,14 @@ func (b *executorBuilder) build(p plan.Plan) Executor {
 		return b.buildDeallocate(v)
 	case *plan.Execute:
 		return b.buildExecute(v)
+	case *plan.Having:
+		return b.buildHaving(v)
 	case *plan.IndexScan:
 		return b.buildIndexScan(v)
+	case *plan.JoinInner:
+		return b.buildJoinInner(v)
+	case *plan.JoinOuter:
+		return b.buildJoinOuter(v)
 	case *plan.Limit:
 		return b.buildLimit(v)
 	case *plan.Prepare:
@@ -160,7 +166,32 @@ func (b *executorBuilder) buildIndexRange(scan *IndexScanExec, v *plan.IndexRang
 	return ran
 }
 
+func (b *executorBuilder) buildJoinOuter(v *plan.JoinOuter) *JoinOuterExec {
+	e := &JoinOuterExec{
+		OuterExec: b.build(v.Outer),
+		InnerPlan: v.Inner,
+		fields:    v.Fields(),
+		builder:   b,
+	}
+	return e
+}
+
+func (b *executorBuilder) buildJoinInner(v *plan.JoinInner) *JoinInnerExec {
+	e := &JoinInnerExec{
+		InnerPlans: v.Inners,
+		innerExecs: make([]Executor, len(v.Inners)),
+		Condition:  b.joinConditions(v.Conditions),
+		fields:     v.Fields(),
+		ctx:        b.ctx,
+		builder:    b,
+	}
+	return e
+}
+
 func (b *executorBuilder) joinConditions(conditions []ast.ExprNode) ast.ExprNode {
+	if len(conditions) == 0 {
+		return nil
+	}
 	if len(conditions) == 1 {
 		return conditions[0]
 	}
@@ -209,6 +240,11 @@ func (b *executorBuilder) buildAggregate(v *plan.Aggregate) Executor {
 		GroupByItems: v.GroupByItems,
 	}
 	return e
+}
+
+func (b *executorBuilder) buildHaving(v *plan.Having) Executor {
+	src := b.build(v.Src())
+	return b.buildFilter(src, v.Conditions)
 }
 
 func (b *executorBuilder) buildSort(v *plan.Sort) Executor {
