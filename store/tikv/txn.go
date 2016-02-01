@@ -103,10 +103,7 @@ func (txn *tikvTxn) doCommit() error {
 		return nil
 	})
 	cmdPrewriteReq.Locks = txn.lockKeys
-	startTS, err := txn.store.oracle.GetTimestamp()
-	if err != nil {
-		return errors.Trace(err)
-	}
+	startTS = txn.tid
 	cmdPrewriteReq.StartVersion = proto.Uint64(startTS)
 	req := &pb.Request{
 		Type:           pb.MessageType_CmdPrewrite.Enum(),
