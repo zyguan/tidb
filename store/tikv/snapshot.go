@@ -14,8 +14,11 @@
 package tikv
 
 import (
+	"github.com/c4pt0r/proto"
 	"github.com/juju/errors"
+	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
+	pb "github.com/pingcap/tidb/store/tikv/kvrpc/proto"
 )
 
 var (
@@ -24,34 +27,25 @@ var (
 )
 
 const tikvBatchSize = 1000
+const tikvScanLimit uint32 = 1000
 
 // tikvSnapshot implements MvccSnapshot interface.
 type tikvSnapshot struct {
-	storeName string
+	store   *tikvStore
+	version kv.Version
 }
 
 // newTiKVSnapshot creates a snapshot of an TiKV store.
-func newTiKVSnapshot(storeName string) *tikvSnapshot {
+func newTiKVSnapshot(store *tikvStore, ver kv.Version) *tikvSnapshot {
 	return &tikvSnapshot{
-		storeName: storeName,
+		store:   store,
+		version: ver,
 	}
-}
-
-// Get gets the value for key k from snapshot.
-func (s *tikvSnapshot) Get(k kv.Key) ([]byte, error) {
-	// TODO: impl this
-	return nil, nil
-	//g := tikv.NewGet([]byte(k))
-	//g.AddColumn(tikvColFamilyBytes, tikvQualifierBytes)
-	//v, err := internalGet(s, g)
-	//if err != nil {
-	//return nil, errors.Trace(err)
-	//}
-	//return v, nil
 }
 
 // BatchGet implements kv.Snapshot.BatchGet interface.
 func (s *tikvSnapshot) BatchGet(keys []kv.Key) (map[string][]byte, error) {
+	// TODO: send batch get rpc
 	m := make(map[string][]byte, len(keys))
 	var err error
 	for _, key := range keys {
@@ -62,65 +56,99 @@ func (s *tikvSnapshot) BatchGet(keys []kv.Key) (map[string][]byte, error) {
 		}
 	}
 	return m, nil
-	//gets := make([]*tikv.Get, len(keys))
-	//for i, key := range keys {
-	//g := tikv.NewGet(key)
-	//g.AddColumn(tikvColFamilyBytes, tikvQualifierBytes)
-	//gets[i] = g
-	//}
-	//rows, err := s.txn.Gets(s.storeName, gets)
-	//if err != nil {
-	//return nil, errors.Trace(err)
-	//}
-
-	//m := make(map[string][]byte, len(rows))
-	//for _, r := range rows {
-	//k := string(r.Row)
-	//v := r.Columns[tikvFmlAndQual].Value
-	//m[k] = v
-	//}
-	//return m, nil
 }
 
-//func internalGet(s *tikvSnapshot, g *tikv.Get) ([]byte, error) {
-//r, err := s.txn.Get(s.storeName, g)
-//if err != nil {
-//return nil, errors.Trace(err)
-//}
-//if r == nil || len(r.Columns) == 0 {
-//return nil, errors.Trace(kv.ErrNotExist)
-//}
-//return r.Columns[tikvFmlAndQual].Value, nil
-//}
+// Get gets the value for key k from snapshot.
+func (s *tikvSnapshot) Get(k kv.Key) ([]byte, error) {
+	// construct CmdGetRequest
+	cmdGetReq := &pb.CmdGetRequest{
+		Key:     []byte(k),
+		Version: proto.Uint64(s.version.Ver),
+	}
+	req := &pb.Request{
+		Type:      pb.MessageType_CmdGet.Enum(),
+		CmdGetReq: cmdGetReq,
+	}
+
+	resp, err := s.store.conn.Send(req)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if resp.GetType() != pb.MessageType_CmdGet {
+		return nil, errors.Errorf("receive response[%s] dismatch request[%s]",
+			resp.GetType(), req.GetType())
+	}
+	cmdGetResp := resp.GetCmdGetResp()
+	if cmdGetResp == nil {
+		return nil, errors.New("body is missing in get response")
+	}
+	if !cmdGetResp.GetOk() {
+		return nil, errors.New("some error occur in Get")
+	}
+	return cmdGetResp.Value, nil
+}
 
 func (s *tikvSnapshot) Seek(k kv.Key) (kv.Iterator, error) {
-	// TODO: impl this
-	return newTiKVIter(), nil
-	//scanner := s.txn.GetScanner([]byte(s.storeName), []byte(k), nil, tikvBatchSize)
-	//return newInnerScanner(scanner), nil
+	// construct CmdScanRequest
+	if k == nil {
+		k = []byte("")
+	}
+	cmdScanReq := &pb.CmdScanRequest{
+		Key:     []byte(k),
+		Limit:   proto.Uint32(tikvScanLimit),
+		Version: proto.Uint64(s.version.Ver),
+	}
+	req := &pb.Request{
+		Type:       pb.MessageType_CmdScan.Enum(),
+		CmdScanReq: cmdScanReq,
+	}
+
+	log.Debugf("start_key %d %s", len(k), k)
+	resp, err := s.store.conn.Send(req)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if resp.GetType() != pb.MessageType_CmdScan {
+		return nil, errors.Errorf("receive response[%s] dismatch request[%s]",
+			resp.GetType(), req.GetType())
+	}
+	cmdScanResp := resp.GetCmdScanResp()
+	if cmdScanResp == nil {
+		return nil, errors.New("body is missing in scan response")
+	}
+	if !cmdScanResp.GetOk() {
+		return nil, errors.New("some error occur in Scan")
+	}
+	return newTiKVIter(cmdScanResp.GetResults()), nil
 }
 
 func (s *tikvSnapshot) Release() {
-	// TODO: impl this
-	//if s.txn != nil {
-	//s.txn.Release()
-	//s.txn = nil
-	//}
 }
 
 type tikvIter struct {
 	valid bool
-	k     kv.Key
-	v     []byte
+	rs    []*pb.KvPair
+	idx   int
 }
 
-func newTiKVIter() *tikvIter {
-	return &tikvIter{}
+func newTiKVIter(kv []*pb.KvPair) *tikvIter {
+	return &tikvIter{
+		valid: len(kv) > 0,
+		rs:    kv,
+		idx:   0,
+	}
 }
 
 func (it *tikvIter) Next() error {
-	// TODO: impl this
-	return nil
+	if it.valid {
+		it.idx++
+		if it.idx >= len(it.rs) {
+			it.valid = false
+			return errors.New("out of tikv iterator range")
+		}
+		return nil
+	}
+	return errors.New("tikv iterator is invalid")
 }
 
 func (it *tikvIter) Valid() bool {
@@ -128,11 +156,17 @@ func (it *tikvIter) Valid() bool {
 }
 
 func (it *tikvIter) Key() kv.Key {
-	return it.k
+	if !it.valid {
+		return kv.Key(nil)
+	}
+	return kv.Key(it.rs[it.idx].Key)
 }
 
 func (it *tikvIter) Value() []byte {
-	return it.v
+	if !it.valid {
+		return nil
+	}
+	return it.rs[it.idx].Value
 }
 
 func (it *tikvIter) Close() {

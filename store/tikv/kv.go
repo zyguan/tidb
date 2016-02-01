@@ -24,9 +24,9 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
-	"github.com/pingcap/go-themis/oracle"
-	"github.com/pingcap/go-themis/oracle/oracles"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/store/tikv/oracle"
+	"github.com/pingcap/tidb/store/tikv/oracle/oracles"
 )
 
 const (
@@ -35,12 +35,8 @@ const (
 )
 
 var (
-//_ kv.Storage = (*hbaseStore)(nil)
-)
-
-var (
 	// ErrInvalidDSN is returned when store dsn is invalid.
-	ErrInvalidDSN = errors.New("invalid dsn")
+	ErrInvalidDSN = errors.New("invalid tikv dsn")
 )
 
 type storeCache struct {
@@ -54,64 +50,35 @@ var mc storeCache
 type Driver struct {
 }
 
+const (
+	defaultKVPort = 61234
+)
+
 // Open opens or creates an TiKV storage with given path.
 //
-// The format of path should be 'tikv://zk1,zk2,zk3/table[?tso=local|zk]'.
-// If tso is not provided, it will use a local oracle instead. (for test only)
+// The format of path should be 'tikv://ip:port/table[?tso=tso_ip:tso_port]'.
+// If tso is not provided, it will use as server. (for test only)
 func (d Driver) Open(path string) (kv.Storage, error) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 
-	zks, tso, tableName, err := parsePath(path)
+	srvHost, tsoHost, tableName, err := parsePath(path)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	if tso != tsoTypeLocal && tso != tsoTypeZK {
-		return nil, errors.Trace(ErrInvalidDSN)
-	}
-
-	uuid := fmt.Sprintf("tikv-%v-%v", zks, tableName)
-	if tso == tsoTypeLocal {
-		log.Warnf("tikv: store(%s) is using local oracle(for test only)", uuid)
-	}
+	uuid := fmt.Sprintf("tikv-%v-%v-%v", srvHost, tsoHost, tableName)
 	if store, ok := mc.cache[uuid]; ok {
 		return store, nil
 	}
 
-	// create buffered TiKV connections
-	conns := make([]Client, 0, tikvConnPoolSize)
-	for i := 0; i < tikvConnPoolSize; i++ {
-		var c Client
-		c, err = NewClient(strings.Split(zks, ","), "/tikv")
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		conns = append(conns, c)
-	}
-
-	//c := conns[0]
-	//var b bool
-	//b, err = c.TableExists(tableName)
-	//if err != nil {
-	//return nil, errors.Trace(err)
-	//}
-	//if !b {
-	//// Create new TiKV table for store.
-	//}
-
 	var ora oracle.Oracle
-	switch tso {
-	case tsoTypeLocal:
-		ora = oracles.NewLocalOracle()
-	case tsoTypeZK:
-		ora = oracles.NewRemoteOracle(zks, tsoZKPath)
-	}
+	ora = oracles.NewRemoteOracle(tsoHost)
 
 	s := &tikvStore{
 		uuid:      uuid,
 		storeName: tableName,
 		oracle:    ora,
-		conns:     conns,
+		conn:      NewClient(srvHost),
 	}
 	mc.cache[uuid] = s
 	return s, nil
@@ -122,38 +89,24 @@ type tikvStore struct {
 	uuid      string
 	storeName string
 	oracle    oracle.Oracle
-	conns     []Client
+	conn      *Client
 }
 
-func (s *tikvStore) getTiKVClient() Client {
-	// return TiKV connection randomly
-	return s.conns[rand.Intn(tikvConnPoolSize)]
+func (s *tikvStore) getTiKVClient() *Client {
+	return s.conn
 }
 
 func (s *tikvStore) Begin() (kv.Transaction, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// TODO: impl this
-	return nil, nil
-
-	//t, err := themis.NewTxn(hbaseCli, s.oracle)
-	//if err != nil {
-	//return nil, errors.Trace(err)
-	//}
-	//txn := newHbaseTxn(t, s.storeName)
-	//return txn, nil
+	return newTiKVTxn(s, s.storeName), nil
 }
 
 func (s *tikvStore) GetSnapshot(ver kv.Version) (kv.Snapshot, error) {
-	// TODO: impl this
-	return nil, nil
-
-	//hbaseCli := s.getHBaseClient()
-	//t, err := themis.NewTxn(hbaseCli, s.oracle)
-	//if err != nil {
-	//return nil, errors.Trace(err)
-	//}
-	//return newHbaseSnapshot(t, s.storeName), nil
+	txn := newTiKVTxn(s, s.storeName)
+	txn.version = ver
+	snapshot := newTiKVSnapshot(s, ver)
+	return snapshot, nil
 }
 
 func (s *tikvStore) Close() error {
@@ -163,13 +116,10 @@ func (s *tikvStore) Close() error {
 	delete(mc.cache, s.uuid)
 
 	var err error
-	for _, conn := range s.conns {
-		err = conn.Close()
-		if err != nil {
-			log.Error(err)
-		}
+	err = s.conn.Close()
+	if err != nil {
+		log.Error(err)
 	}
-	// return last error
 	return err
 }
 
@@ -178,43 +128,31 @@ func (s *tikvStore) UUID() string {
 }
 
 func (s *tikvStore) CurrentVersion() (kv.Version, error) {
-	// TODO: impl this
-	return kv.Version{Ver: 0}, nil
-	//tikvCli := s.getTiKVClient()
-	//txn, err := NewTxn(tikvCli, s.oracle)
-	//if err != nil {
-	//return kv.Version{Ver: 0}, errors.Trace(err)
-	//}
-	//defer t.Release()
-
-	//return kv.Version{Ver: t.GetStartTS()}, nil
+	startTS, err := s.oracle.GetTimestamp()
+	if err != nil {
+		return kv.NewVersion(0), errors.Trace(err)
+	}
+	return kv.NewVersion(startTS), nil
 }
 
-const (
-	tsoTypeLocal = "local"
-	tsoTypeZK    = "zk"
-
-	tsoZKPath = "/zk/tso"
-)
-
-func parsePath(path string) (zks, tso, tableName string, err error) {
+func parsePath(path string) (srvHost string, tsoHost string, tableName string, err error) {
 	u, err := url.Parse(path)
 	if err != nil {
 		return "", "", "", errors.Trace(err)
 	}
-	if strings.ToLower(u.Scheme) != "hbase" {
+	if strings.ToLower(u.Scheme) != "tikv" {
 		return "", "", "", errors.Trace(ErrInvalidDSN)
 	}
 	p, tableName := filepath.Split(u.Path)
 	if p != "/" {
 		return "", "", "", errors.Trace(ErrInvalidDSN)
 	}
-	zks = u.Host
-	tso = u.Query().Get("tso")
-	if tso == "" {
-		tso = tsoTypeLocal
+	srvHost = u.Host
+	tsoHost = u.Query().Get("tso")
+	if tsoHost == "" {
+		tsoHost = srvHost
 	}
-	return zks, tso, tableName, nil
+	return srvHost, tsoHost, tableName, nil
 }
 
 func init() {

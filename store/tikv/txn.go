@@ -16,15 +16,17 @@ package tikv
 import (
 	"fmt"
 
+	"github.com/c4pt0r/proto"
+	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
+	pb "github.com/pingcap/tidb/store/tikv/kvrpc/proto"
 )
 
 var (
 	_ kv.Transaction = (*tikvTxn)(nil)
 )
 
-// tikvTxn implements kv.Transacton. It is not thread safe.
 type tikvTxn struct {
 	us        kv.UnionStore
 	store     *tikvStore // for commit
@@ -32,14 +34,17 @@ type tikvTxn struct {
 	tid       uint64
 	valid     bool
 	version   kv.Version // commit version
+	lockKeys  [][]byte
 }
 
 func newTiKVTxn(store *tikvStore, storeName string) *tikvTxn {
+	startTS, _ := store.oracle.GetTimestamp()
+	ver := kv.NewVersion(startTS)
 	return &tikvTxn{
-		us:        kv.NewUnionStore(newTiKVSnapshot(storeName)),
+		us:        kv.NewUnionStore(newTiKVSnapshot(store, ver)),
 		store:     store,
 		storeName: storeName,
-		tid:       0,
+		tid:       startTS,
 		valid:     true,
 	}
 }
@@ -51,7 +56,7 @@ func (txn *tikvTxn) Get(k kv.Key) ([]byte, error) {
 }
 
 func (txn *tikvTxn) Set(k kv.Key, v []byte) error {
-	log.Debugf("[kv] seek %q txn:%d", k, txn.tid)
+	log.Debugf("[kv] set %q txn:%d", k, txn.tid)
 	return txn.us.Set(k, v)
 }
 
@@ -77,44 +82,85 @@ func (txn *tikvTxn) DelOption(opt kv.Option) {
 	txn.us.DelOption(opt)
 }
 
+// doCommit First invoke prewrite, if it is ok then invoke commit
 func (txn *tikvTxn) doCommit() error {
-	// TODO: impl this
+	if err := txn.us.CheckLazyConditionPairs(); err != nil {
+		return errors.Trace(err)
+	}
+
+	// Construct CmdPrewriteRequest.
+	cmdPrewriteReq := new(pb.CmdPrewriteRequest)
+	err := txn.us.WalkBuffer(func(k kv.Key, v []byte) error {
+		// Convert Key to byte[].
+		row := append([]byte(nil), k...)
+		if len(v) == 0 { // Deleted marker
+			cmdPrewriteReq.Dels = append(cmdPrewriteReq.Dels, row)
+		} else {
+			val := append([]byte(nil), v...)
+			kv := pb.KvPair{Key: row, Value: val}
+			cmdPrewriteReq.Puts = append(cmdPrewriteReq.Puts, &kv)
+		}
+		return nil
+	})
+	cmdPrewriteReq.Locks = txn.lockKeys
+	startTS, err := txn.store.oracle.GetTimestamp()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	cmdPrewriteReq.StartVersion = proto.Uint64(startTS)
+	req := &pb.Request{
+		Type:           pb.MessageType_CmdPrewrite.Enum(),
+		CmdPrewriteReq: cmdPrewriteReq,
+	}
+	txn.version = kv.Version{Ver: startTS}
+
+	// Receive prewrite response, then call commit.
+	resp, err := txn.store.conn.Send(req)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if resp.GetType() != pb.MessageType_CmdPrewrite {
+		return errors.Errorf("receive response[%s] dismatch request[%s]",
+			resp.GetType(), req.GetType())
+	}
+	cmdPrewriteResp := resp.GetCmdPrewriteResp()
+	if cmdPrewriteResp == nil {
+		return errors.New("body is missing in prewrite response")
+	}
+	if !cmdPrewriteResp.GetOk() {
+		return errors.New("some error occur in Prewrite")
+	}
+
+	// Construct CmdCommitRequest.
+	cmdCommitReq := new(pb.CmdCommitRequest)
+	commitTS, err := txn.store.oracle.GetTimestamp()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	cmdCommitReq.StartVersion = proto.Uint64(startTS)
+	cmdCommitReq.CommitVersion = proto.Uint64(commitTS)
+	commitReq := &pb.Request{
+		Type:         pb.MessageType_CmdCommit.Enum(),
+		CmdCommitReq: cmdCommitReq,
+	}
+
+	// Receive commit response.
+	commitResp, err := txn.store.conn.Send(commitReq)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if commitResp.GetType() != pb.MessageType_CmdCommit {
+		return errors.Errorf("receive response[%s] dismatch request[%s]",
+			commitResp.GetType(), commitReq.GetType())
+	}
+	cmdCommitResp := commitResp.GetCmdCommitResp()
+	if cmdCommitResp == nil {
+		return errors.New("body is missing in commit response")
+	}
+	if !cmdCommitResp.GetOk() {
+		return errors.New("some error occur in Commit")
+	}
 	return nil
-	//if err := txn.us.CheckLazyConditionPairs(); err != nil {
-	//return errors.Trace(err)
-	//}
-
-	//err := txn.us.WalkBuffer(func(k kv.Key, v []byte) error {
-	//row := append([]byte(nil), k...)
-	//if len(v) == 0 { // Deleted marker
-	//d := tikv.NewDelete(row)
-	//d.AddStringColumn(tikvColFamily, tikvQualifier)
-	//err := txn.txn.Delete(txn.storeName, d)
-	//if err != nil {
-	//return errors.Trace(err)
-	//}
-	//} else {
-	//val := append([]byte(nil), v...)
-	//p := tikv.NewPut(row)
-	//p.AddValue(tikvColFamilyBytes, tikvQualifierBytes, val)
-	//txn.txn.Put(txn.storeName, p)
-	//}
-	//return nil
-	//})
-
-	//if err != nil {
-	//return errors.Trace(err)
-	//}
-
-	//err = txn.txn.Commit()
-	//if err != nil {
-	//log.Error(err)
-	//return errors.Trace(err)
-	//}
-
-	//txn.version = kv.NewVersion(txn.txn.GetCommitTS())
-	//log.Debugf("[kv] commit successfully, txn.version:%d", txn.version.Ver)
-	//return nil
 }
 
 func (txn *tikvTxn) Commit() error {
@@ -135,21 +181,17 @@ func (txn *tikvTxn) close() error {
 }
 
 func (txn *tikvTxn) Rollback() error {
-	// TODO: impl this
+	if !txn.valid {
+		return kv.ErrInvalidTxn
+	}
+	log.Warnf("[kv] Rollback txn %d", txn.tid)
 	return nil
-	//if !txn.valid {
-	//return kv.ErrInvalidTxn
-	//}
-	//log.Warnf("[kv] Rollback txn %d", txn.tid)
-	//return txn.close()
 }
 
 func (txn *tikvTxn) LockKeys(keys ...kv.Key) error {
 	// TODO: impl this
-	//for _, key := range keys {
-	//if err := txn.txn.LockRow(txn.storeName, key); err != nil {
-	//return errors.Trace(err)
-	//}
-	//}
+	for _, key := range keys {
+		txn.lockKeys = append(txn.lockKeys, key)
+	}
 	return nil
 }

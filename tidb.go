@@ -44,6 +44,7 @@ import (
 	"github.com/pingcap/tidb/store/localstore/boltdb"
 	"github.com/pingcap/tidb/store/localstore/engine"
 	"github.com/pingcap/tidb/store/localstore/goleveldb"
+	"github.com/pingcap/tidb/store/tikv"
 )
 
 // Engine prefix name
@@ -52,6 +53,7 @@ const (
 	EngineGoLevelDBPersistent = "goleveldb://"
 	EngineBoltDB              = "boltdb://"
 	EngineHBase               = "hbase://"
+	EngineTiKV                = "tikv://"
 	defaultMaxRetries         = 30
 	retrySleepInterval        = 500 * time.Millisecond
 )
@@ -276,6 +278,7 @@ func init() {
 	RegisterLocalStore("goleveldb", goleveldb.Driver{})
 	RegisterLocalStore("boltdb", boltdb.Driver{})
 	RegisterStore("hbase", hbasekv.Driver{})
+	RegisterStore("tikv", tikv.Driver{})
 
 	// start pprof handlers
 	if EnablePprof {
