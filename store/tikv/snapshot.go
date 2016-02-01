@@ -14,7 +14,7 @@
 package tikv
 
 import (
-	"github.com/c4pt0r/proto"
+	"github.com/golang/protobuf/proto"
 	"github.com/juju/errors"
 	"github.com/ngaut/log"
 	"github.com/pingcap/tidb/kv"
