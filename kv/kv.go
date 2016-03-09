@@ -74,6 +74,48 @@ type Transaction interface {
 	SetOption(opt Option, val interface{})
 	// DelOption deletes an option.
 	DelOption(opt Option)
+
+	// GetClient gets kv client instance.
+	GetClient() Client
+
+	// StartTS returns the start timestamp.
+	StartTS() int64
+}
+
+// Client is used to send request to remote kv store.
+type Client interface {
+	// Send sends request to kv store returns a ResponseIterator.
+	// The same request may be sent to multiple region servers, then get multiple responses.
+	// If concurrency is 1, it only sends the request to a single region when
+	// ResponseIterator.Next is called.
+	Send(req *Request) ResponseIterator
+
+	// SupportRequestType checks if reqType is supported.
+	SupportRequestType(reqType, subType int64) bool
+}
+
+const (
+	ReqTypeSelect = 100
+)
+
+// Request represents a kv request.
+type Request struct {
+	// The request type.
+	Tp       int64
+	Data     []byte
+	StartKey []byte
+	EndKey   []byte
+	// If desc is true, the request is sent in descending order.
+	Desc bool
+	// If concurrency is greater than 1, it concurrently request multiple region servers.
+	Concurrency int
+}
+
+// ResponseIterator is used to get responses from multiple region.
+type ResponseIterator interface {
+	// Next returns the response from a single region.
+	// When all region returned response, nil is returned.
+	Next() (resp []byte, err error)
 }
 
 // Snapshot defines the interface for the snapshot fetched from KV store.

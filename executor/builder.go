@@ -21,12 +21,14 @@ import (
 	"github.com/pingcap/tidb/column"
 	"github.com/pingcap/tidb/context"
 	"github.com/pingcap/tidb/infoschema"
+	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/optimizer/plan"
 	"github.com/pingcap/tidb/parser/opcode"
 	"github.com/pingcap/tidb/sessionctx/autocommit"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/xapi"
 )
 
 // executorBuilder builds an Executor from a Plan.
@@ -117,6 +119,25 @@ func (b *executorBuilder) buildFilter(src Executor, conditions []ast.ExprNode) E
 }
 
 func (b *executorBuilder) buildTableScan(v *plan.TableScan) Executor {
+	txn, err := b.ctx.GetTxn(false)
+	if err != nil {
+		b.err = err
+		return nil
+	}
+	client := txn.GetClient()
+	if client.SupportRequestType(kv.ReqTypeSelect, 0) {
+		e := &XSelectTableExec{
+			ctx:       b.ctx,
+			tablePlan: v,
+		}
+		where := conditionsToPBExpression(v.FilterConditions)
+		if xapi.SupportExpression(client, where) {
+			e.where = where
+			return e
+		}
+		return b.buildFilter(e, v.FilterConditions)
+	}
+
 	table, _ := b.is.TableByID(v.Table.ID)
 	e := &TableScanExec{
 		t:          table,
@@ -150,6 +171,24 @@ func (b *executorBuilder) buildDeallocate(v *plan.Deallocate) Executor {
 }
 
 func (b *executorBuilder) buildIndexScan(v *plan.IndexScan) Executor {
+	txn, err := b.ctx.GetTxn(false)
+	if err != nil {
+		b.err = err
+		return nil
+	}
+	client := txn.GetClient()
+	if client.SupportRequestType(kv.ReqTypeSelect, 0) {
+		e := &XSelectIndexExec{
+			ctx:       b.ctx,
+			indexPlan: v,
+		}
+		where := conditionsToPBExpression(v.FilterConditions)
+		if xapi.SupportExpression(client, where) {
+			e.where = where
+			return e
+		}
+		return b.buildFilter(e, v.FilterConditions)
+	}
 	tbl, _ := b.is.TableByID(v.Table.ID)
 	var idx *column.IndexedCol
 	for _, val := range tbl.Indices() {
