@@ -293,6 +293,7 @@ type storeCache struct {
 var (
 	globalVersionProvider kv.VersionProvider
 	mc                    storeCache
+	pd                    localPD
 
 	// ErrDBClosed is the error meaning db is closed and we can use it anymore.
 	ErrDBClosed = errors.New("db is closed")
