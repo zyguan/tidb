@@ -82,15 +82,12 @@ type Transaction interface {
 	StartTS() int64
 }
 
-// Client is used to send request to remote kv store.
+// Client is used to send request to KV layer.
 type Client interface {
-	// Send sends request to kv store returns a ResponseIterator.
-	// The same request may be sent to multiple region servers, then get multiple responses.
-	// If concurrency is 1, it only sends the request to a single region when
-	// ResponseIterator.Next is called.
+	// Send sends request to KV layer, returns a ResponseIterator.
 	Send(req *Request) ResponseIterator
 
-	// SupportRequestType checks if reqType is supported.
+	// SupportRequestType checks if reqType and subType is supported.
 	SupportRequestType(reqType, subType int64) bool
 }
 
@@ -107,14 +104,16 @@ type Request struct {
 	EndKey   []byte
 	// If desc is true, the request is sent in descending order.
 	Desc bool
-	// If concurrency is greater than 1, it concurrently request multiple region servers.
+	// If concurrency is 1, it only sends the request to a single storage node when
+	// ResponseIterator.Next is called. If concurrency is greater than 1, the request will be
+	// sent to multiple storage nodes concurrently.
 	Concurrency int
 }
 
-// ResponseIterator is used to get responses from multiple region.
+// ResponseIterator is used to get responses from KV layer.
 type ResponseIterator interface {
-	// Next returns the response from a single region.
-	// When all region returned response, nil is returned.
+	// Next returns the response from a single storage node.
+	// When all storage nodes returned responses, nil is returned.
 	Next() (resp []byte, err error)
 }
 
