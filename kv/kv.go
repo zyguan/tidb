@@ -95,13 +95,18 @@ const (
 	ReqTypeSelect = 100
 )
 
+type KeyRange struct {
+	StartKey Key
+	EndKey   Key
+}
+
 // Request represents a kv request.
 type Request struct {
 	// The request type.
-	Tp       int64
-	Data     []byte
-	StartKey []byte
-	EndKey   []byte
+	Tp   int64
+	Data []byte
+	// Key Ranges
+	KeyRanges []*KeyRange
 	// If desc is true, the request is sent in descending order.
 	Desc bool
 	// If concurrency is 1, it only sends the request to a single storage node when
@@ -110,11 +115,19 @@ type Request struct {
 	Concurrency int
 }
 
+// Response represents the response from a single storage node.
+type Response interface {
+	// Next returns the next row from a single storage node. If all data returned, Next() will return nil.
+	Next() (row []byte, err error)
+	// Close closes a response from a region server.
+	Close() (err error)
+}
+
 // ResponseIterator is used to get responses from KV layer.
 type ResponseIterator interface {
 	// Next returns the response from a single storage node.
 	// When all storage nodes returned responses, nil is returned.
-	Next() (resp []byte, err error)
+	Next() (resp Response, err error)
 }
 
 // Snapshot defines the interface for the snapshot fetched from KV store.

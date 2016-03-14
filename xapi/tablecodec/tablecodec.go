@@ -1,14 +1,14 @@
 package tablecodec
 
 import (
+	"github.com/juju/errors"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/util/types"
-	"github.com/juju/errors"
 )
 
 var (
-	TablePrefix = []byte{'t'}
+	TablePrefix     = []byte{'t'}
 	recordPrefixSep = []byte("_r")
 	indexPrefixSep  = []byte("_i")
 )
@@ -24,7 +24,29 @@ func EncodeRecordKey(tableId int64, h int64, columnID int64) kv.Key {
 	return buf
 }
 
-func EncodeIndexKey(tableId int64, indexedValues []types.Datum, handle int64, unique bool) (key []byte, distinct bool, err error){
+func EncodeRowKey(tableId int64, bsHandle []byte) kv.Key {
+	recordPrefix := genTableRecordPrefix(tableId)
+	key := make([]byte, 0, len(recordPrefix)+16)
+	key = append(key, recordPrefix...)
+	key = codec.EncodeKey(key, bsHandle)
+	return key
+}
+
+func EncodeIndexRangeKey(tableId int64, key []byte) (kv.Key, error) {
+	prefix := genTableIndexPrefix(tableId)
+	key = append(key, prefix...)
+	if distinct {
+		key, err = codec.EncodeKey(key, indexedValues...)
+	} else {
+		key, err = codec.EncodeKey(key, append(indexedValues, types.NewDatum(handle))...)
+	}
+	if err != nil {
+		return nil, false, errors.Trace(err)
+	}
+	return key, distinct, nil
+}
+
+func EncodeIndexKey(tableId int64, indexedValues []types.Datum, handle int64, unique bool) (key []byte, distinct bool, err error) {
 	if unique {
 		// See: https://dev.mysql.com/doc/refman/5.7/en/create-index.html
 		// A UNIQUE index creates a constraint such that all values in the index must be distinct.

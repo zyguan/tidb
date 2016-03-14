@@ -32,6 +32,34 @@ func (c *localClient) updateRegionInfo() {
 	c.regionInfo = pd.GetRegionInfo()
 }
 
+type localResponse struct {
+	rows     []*tipb.Row
+	cursor   int
+	finished true
+}
+
+func (r *localResponse) Next() ([]byte, error) {
+	if r.finished {
+		return nil, nil
+	}
+	if cursor >= len(r.rows) {
+		r.finished = true
+		return nil, nil
+	}
+	d := r.rows[r.cursor]
+	r.cursor++
+	// convert d to bytes
+	return r.rowToBytes(d), nil
+}
+
+func (r *localResponse) rowToBytes(row *tipb.Row) ([]byte, error) {
+	bs, err := proto.Marshal(row)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return bs, err
+}
+
 type respIterator struct {
 	client      *localClient
 	reqSent     int64
@@ -76,7 +104,16 @@ func (it *respIterator) Next() (resp []byte, err error) {
 	if it.reqSent == len(it.tasks) && it.respGot == it.reqSent {
 		it.Close()
 	}
-	return regionResp.data, nil
+	resp := new(tipb.SelectResponse)
+	rs, err := proto.Unmarshal(regionResp.Data, resp)
+	if err != nil {
+		it.Close()
+		return nil, errors.Trace(err)
+	}
+	lr := localResponse{
+		rows: rs.Rows,
+	}
+	return lr, nil
 }
 
 func (it *respIterator) createRetryTasks(resp *regionResponse) []*task {
