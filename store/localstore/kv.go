@@ -294,6 +294,7 @@ var (
 	globalVersionProvider kv.VersionProvider
 	mc                    storeCache
 	pd                    localPD
+	region_servers        []*localRS
 
 	// ErrDBClosed is the error meaning db is closed and we can use it anymore.
 	ErrDBClosed = errors.New("db is closed")
@@ -355,8 +356,14 @@ func (d Driver) Open(path string) (kv.Storage, error) {
 	s.recentUpdates, err = segmentmap.NewSegmentMap(100)
 	if err != nil {
 		return nil, errors.Trace(err)
-
 	}
+	region_servers = buildLocalRegionServers(s)
+	var infos []*regionInfo
+	for _, rs := range region_servers {
+		ri := &regionInfo{startKey:rs.startKey, endKey:rs.endKey, rs: rs}
+		infos = append(infos, ri)
+	}
+	pd.SetRegionInfo(infos)
 	mc.cache[engineSchema] = s
 	s.compactor.Start()
 	s.wg.Add(1)

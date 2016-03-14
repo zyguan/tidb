@@ -15,6 +15,7 @@ import (
 
 // local region server.
 type localRS struct {
+	id       int
 	store    *dbStore
 	startKey []byte
 	endKey   []byte
@@ -170,11 +171,42 @@ func (rs *localRS) getRowFromHandle(txn kv.Transaction, tid, h int64, columns []
 }
 
 func datumToBytes(d types.Datum) []byte {
+	switch d.Kind() {
+	case types.KindNull:
+		return []byte{}
+	case types.KindInt64:
+		return strconv.AppendInt(nil, d.GetInt64(), 10)
+	case types.KindFloat32:
+		return strconv.AppendFloat(nil, d.GetFloat64(), 'f', -1, 32)
+	case types.KindFloat64:
+		return strconv.AppendFloat(nil, d.GetFloat64(), 'f', -1, 64)
+	case types.KindBytes, types.KindString:
+		return d.GetBytes()
+	case types.KindMysqlBit:
+		return []byte(d.GetMysqlBit().ToString())
+	case types.KindMysqlDecimal:
+		return []byte(d.GetMysqlDecimal().String())
+	case types.KindMysqlDuration:
+		return []byte(d.GetMysqlDuration().String())
+	case types.KindMysqlEnum:
+		return []byte(d.GetMysqlEnum().String())
+	case types.KindMysqlHex:
+		return []byte(d.GetMysqlHex().ToString())
+	case types.KindMysqlSet:
+		return []byte(d.GetMysqlSet().String())
+	case types.KindMysqlTime:
+		return []byte(d.GetMysqlTime().String())
+	}
 	return nil
 }
 
 func toPBError(err error) *tipb.Error {
-	return nil
+	perr := new(tipb.Error)
+	code := tipb.ErrorCode_UnkownError
+	perr.Code = &code
+	errStr := err.Error()
+	perr.ErrMsg = &errStr
+	return perr
 }
 
 func seekRangeHandles(txn kv.Transaction, ran kvRange) ([]int64, error) {
@@ -196,4 +228,27 @@ func seekRangeHandles(txn kv.Transaction, ran kvRange) ([]int64, error) {
 		seekKey = tablecodec.EncodeRecordKey(tid, h+1, 0)
 	}
 	return handles, nil
+}
+
+func buildLocalRegionServers(store *dbStore) []*localRS {
+	return []*localRS{
+		{
+			id: 1,
+			store: store,
+			startKey: []byte(""),
+			endKey: []byte("t"),
+		},
+		{
+			id: 2,
+			store: store,
+			startKey: []byte("t"),
+			endKey: []byte("u"),
+		},
+		{
+			id: 3,
+			store: store,
+			startKey: []byte("u"),
+			endKey: []byte("z"),
+		},
+	}
 }
