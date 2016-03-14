@@ -17,11 +17,13 @@ It has these top-level messages:
 	TableInfo
 	ColumnInfo
 	IndexInfo
-	KeyRange
-	KeyPoint
+	HandleRange
 	SelectRequest
 	Row
 	SelectResponse
+	KeyRange
+	IndexRequest
+	IndexResponse
 */
 package tipb
 

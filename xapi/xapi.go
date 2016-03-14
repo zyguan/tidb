@@ -11,7 +11,7 @@ type SelectResult struct {
 }
 
 func (r *SelectResult) Next() (row [][]byte, err error) {
-	return nil
+	return nil, nil
 }
 
 func Select(client kv.Client, req *tipb.SelectRequest, concurrency int) (*SelectResult, error) {

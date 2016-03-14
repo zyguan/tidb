@@ -13,50 +13,31 @@ var _ = proto.Marshal
 var _ = fmt.Errorf
 var _ = math.Inf
 
-// KeyRange specifies the range of key to be scanned.
-// low is closed, high is open ( low <= value < high )
-// It can be table handle or index value, it's not the encoded key in the kv store.
-type KeyRange struct {
-	Low              []byte `protobuf:"bytes,1,opt,name=low" json:"low,omitempty"`
-	High             []byte `protobuf:"bytes,2,opt,name=high" json:"high,omitempty"`
+// HandleRange specifies the range of handle to be scanned.
+// low is closed, high is open ( low <= value < high ).
+type HandleRange struct {
+	Low              *int64 `protobuf:"varint,1,opt,name=low" json:"low,omitempty"`
+	High             *int64 `protobuf:"varint,2,opt,name=high" json:"high,omitempty"`
 	XXX_unrecognized []byte `json:"-"`
 }
 
-func (m *KeyRange) Reset()                    { *m = KeyRange{} }
-func (m *KeyRange) String() string            { return proto.CompactTextString(m) }
-func (*KeyRange) ProtoMessage()               {}
-func (*KeyRange) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{0} }
+func (m *HandleRange) Reset()                    { *m = HandleRange{} }
+func (m *HandleRange) String() string            { return proto.CompactTextString(m) }
+func (*HandleRange) ProtoMessage()               {}
+func (*HandleRange) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{0} }
 
-func (m *KeyRange) GetLow() []byte {
-	if m != nil {
-		return m.Low
+func (m *HandleRange) GetLow() int64 {
+	if m != nil && m.Low != nil {
+		return *m.Low
 	}
-	return nil
+	return 0
 }
 
-func (m *KeyRange) GetHigh() []byte {
-	if m != nil {
-		return m.High
+func (m *HandleRange) GetHigh() int64 {
+	if m != nil && m.High != nil {
+		return *m.High
 	}
-	return nil
-}
-
-// KeyPoint represents a single key.
-type KeyPoint struct {
-	Key              []byte `protobuf:"bytes,1,opt,name=key" json:"key,omitempty"`
-	XXX_unrecognized []byte `json:"-"`
-}
-
-func (m *KeyPoint) Reset()                    { *m = KeyPoint{} }
-func (m *KeyPoint) String() string            { return proto.CompactTextString(m) }
-func (*KeyPoint) ProtoMessage()               {}
-func (*KeyPoint) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{1} }
-
-func (m *KeyPoint) GetKey() []byte {
-	if m != nil {
-		return m.Key
-	}
-	return nil
+	return 0
 }
 
 // SelectRequest works like a simplified select statement.
@@ -65,29 +46,27 @@ type SelectRequest struct {
 	StartTs *int64 `protobuf:"varint,1,opt,name=start_ts" json:"start_ts,omitempty"`
 	// If table_info is not null, it represents a table scan, index_info would be null.
 	TableInfo *TableInfo `protobuf:"bytes,2,opt,name=table_info" json:"table_info,omitempty"`
-	// If IndexInfo is not null, table_info would be null.
-	IndexInfo *IndexInfo `protobuf:"bytes,3,opt,name=index_info" json:"index_info,omitempty"`
 	// fields to be selected, fields type can be column reference for simple scan.
 	// or aggregation function.
-	Fields []*Expression `protobuf:"bytes,4,rep,name=fields" json:"fields,omitempty"`
-	// disjoint key ranges to be scanned.
-	Ranges []*KeyRange `protobuf:"bytes,5,rep,name=ranges" json:"ranges,omitempty"`
-	// key points to be looked up.
-	Points []*KeyPoint `protobuf:"bytes,6,rep,name=points" json:"points,omitempty"`
+	Fields []*Expression `protobuf:"bytes,3,rep,name=fields" json:"fields,omitempty"`
+	// disjoint handle ranges to be scanned.
+	Ranges []*HandleRange `protobuf:"bytes,4,rep,name=ranges" json:"ranges,omitempty"`
+	// handle points to be looked up.
+	Points []int64 `protobuf:"varint,5,rep,name=points" json:"points,omitempty"`
 	// where condition.
-	Where *Expression `protobuf:"bytes,7,opt,name=where" json:"where,omitempty"`
+	Where *Expression `protobuf:"bytes,6,opt,name=where" json:"where,omitempty"`
 	// group by clause.
-	GroupBy *Expression `protobuf:"bytes,8,opt,name=group_by" json:"group_by,omitempty"`
+	GroupBy *Expression `protobuf:"bytes,7,opt,name=group_by" json:"group_by,omitempty"`
 	// scan_limit should be greater than or equal to result_limit;
-	ScanLimit        *int64 `protobuf:"varint,9,opt,name=scan_limit" json:"scan_limit,omitempty"`
-	ResultLimit      *int64 `protobuf:"varint,10,opt,name=result_limit" json:"result_limit,omitempty"`
+	ScanLimit        *int64 `protobuf:"varint,8,opt,name=scan_limit" json:"scan_limit,omitempty"`
+	ResultLimit      *int64 `protobuf:"varint,9,opt,name=result_limit" json:"result_limit,omitempty"`
 	XXX_unrecognized []byte `json:"-"`
 }
 
 func (m *SelectRequest) Reset()                    { *m = SelectRequest{} }
 func (m *SelectRequest) String() string            { return proto.CompactTextString(m) }
 func (*SelectRequest) ProtoMessage()               {}
-func (*SelectRequest) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{2} }
+func (*SelectRequest) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{1} }
 
 func (m *SelectRequest) GetStartTs() int64 {
 	if m != nil && m.StartTs != nil {
@@ -103,13 +82,6 @@ func (m *SelectRequest) GetTableInfo() *TableInfo {
 	return nil
 }
 
-func (m *SelectRequest) GetIndexInfo() *IndexInfo {
-	if m != nil {
-		return m.IndexInfo
-	}
-	return nil
-}
-
 func (m *SelectRequest) GetFields() []*Expression {
 	if m != nil {
 		return m.Fields
@@ -117,14 +89,14 @@ func (m *SelectRequest) GetFields() []*Expression {
 	return nil
 }
 
-func (m *SelectRequest) GetRanges() []*KeyRange {
+func (m *SelectRequest) GetRanges() []*HandleRange {
 	if m != nil {
 		return m.Ranges
 	}
 	return nil
 }
 
-func (m *SelectRequest) GetPoints() []*KeyPoint {
+func (m *SelectRequest) GetPoints() []int64 {
 	if m != nil {
 		return m.Points
 	}
@@ -168,7 +140,7 @@ type Row struct {
 func (m *Row) Reset()                    { *m = Row{} }
 func (m *Row) String() string            { return proto.CompactTextString(m) }
 func (*Row) ProtoMessage()               {}
-func (*Row) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{3} }
+func (*Row) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{2} }
 
 func (m *Row) GetValues() [][]byte {
 	if m != nil {
@@ -180,32 +152,23 @@ func (m *Row) GetValues() [][]byte {
 // Response for SelectRequest.
 type SelectResponse struct {
 	Error *Error `protobuf:"bytes,1,opt,name=error" json:"error,omitempty"`
-	// Ranges the region server does not have.
-	MissingRanges []*KeyRange `protobuf:"bytes,2,rep,name=missing_ranges" json:"missing_ranges,omitempty"`
 	// Result rows.
 	Rows []*Row `protobuf:"bytes,3,rep,name=rows" json:"rows,omitempty"`
 	// If the requested key range has not finished scanning.
-	// next_key can be used to compose the range for the following request.
+	// next_handle can be used to compose the range for the following request.
 	// null means there is no more data to scan.
-	NextKey          []byte `protobuf:"bytes,4,opt,name=next_key" json:"next_key,omitempty"`
+	NextHandle       *int64 `protobuf:"varint,4,opt,name=next_handle" json:"next_handle,omitempty"`
 	XXX_unrecognized []byte `json:"-"`
 }
 
 func (m *SelectResponse) Reset()                    { *m = SelectResponse{} }
 func (m *SelectResponse) String() string            { return proto.CompactTextString(m) }
 func (*SelectResponse) ProtoMessage()               {}
-func (*SelectResponse) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{4} }
+func (*SelectResponse) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{3} }
 
 func (m *SelectResponse) GetError() *Error {
 	if m != nil {
 		return m.Error
-	}
-	return nil
-}
-
-func (m *SelectResponse) GetMissingRanges() []*KeyRange {
-	if m != nil {
-		return m.MissingRanges
 	}
 	return nil
 }
@@ -217,7 +180,118 @@ func (m *SelectResponse) GetRows() []*Row {
 	return nil
 }
 
-func (m *SelectResponse) GetNextKey() []byte {
+func (m *SelectResponse) GetNextHandle() int64 {
+	if m != nil && m.NextHandle != nil {
+		return *m.NextHandle
+	}
+	return 0
+}
+
+// KeyRange is the encoded index key ranges.
+type KeyRange struct {
+	Low              []byte `protobuf:"bytes,1,opt,name=low" json:"low,omitempty"`
+	High             []byte `protobuf:"bytes,2,opt,name=high" json:"high,omitempty"`
+	XXX_unrecognized []byte `json:"-"`
+}
+
+func (m *KeyRange) Reset()                    { *m = KeyRange{} }
+func (m *KeyRange) String() string            { return proto.CompactTextString(m) }
+func (*KeyRange) ProtoMessage()               {}
+func (*KeyRange) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{4} }
+
+func (m *KeyRange) GetLow() []byte {
+	if m != nil {
+		return m.Low
+	}
+	return nil
+}
+
+func (m *KeyRange) GetHigh() []byte {
+	if m != nil {
+		return m.High
+	}
+	return nil
+}
+
+type IndexRequest struct {
+	// transaction start timestamp.
+	StartTs *int64 `protobuf:"varint,1,opt,name=start_ts" json:"start_ts,omitempty"`
+	// If IndexInfo is not null, table_info would be null.
+	IndexInfo        *IndexInfo  `protobuf:"bytes,2,opt,name=index_info" json:"index_info,omitempty"`
+	Ranges           []*KeyRange `protobuf:"bytes,3,rep,name=ranges" json:"ranges,omitempty"`
+	Points           [][]byte    `protobuf:"bytes,4,rep,name=points" json:"points,omitempty"`
+	Limit            *int64      `protobuf:"varint,5,opt,name=limit" json:"limit,omitempty"`
+	XXX_unrecognized []byte      `json:"-"`
+}
+
+func (m *IndexRequest) Reset()                    { *m = IndexRequest{} }
+func (m *IndexRequest) String() string            { return proto.CompactTextString(m) }
+func (*IndexRequest) ProtoMessage()               {}
+func (*IndexRequest) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{5} }
+
+func (m *IndexRequest) GetStartTs() int64 {
+	if m != nil && m.StartTs != nil {
+		return *m.StartTs
+	}
+	return 0
+}
+
+func (m *IndexRequest) GetIndexInfo() *IndexInfo {
+	if m != nil {
+		return m.IndexInfo
+	}
+	return nil
+}
+
+func (m *IndexRequest) GetRanges() []*KeyRange {
+	if m != nil {
+		return m.Ranges
+	}
+	return nil
+}
+
+func (m *IndexRequest) GetPoints() [][]byte {
+	if m != nil {
+		return m.Points
+	}
+	return nil
+}
+
+func (m *IndexRequest) GetLimit() int64 {
+	if m != nil && m.Limit != nil {
+		return *m.Limit
+	}
+	return 0
+}
+
+// IndexResponse is the
+type IndexResponse struct {
+	Error            *Error  `protobuf:"bytes,1,opt,name=error" json:"error,omitempty"`
+	Handles          []int64 `protobuf:"varint,2,rep,name=handles" json:"handles,omitempty"`
+	NextKey          []byte  `protobuf:"bytes,3,opt,name=next_key" json:"next_key,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *IndexResponse) Reset()                    { *m = IndexResponse{} }
+func (m *IndexResponse) String() string            { return proto.CompactTextString(m) }
+func (*IndexResponse) ProtoMessage()               {}
+func (*IndexResponse) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{6} }
+
+func (m *IndexResponse) GetError() *Error {
+	if m != nil {
+		return m.Error
+	}
+	return nil
+}
+
+func (m *IndexResponse) GetHandles() []int64 {
+	if m != nil {
+		return m.Handles
+	}
+	return nil
+}
+
+func (m *IndexResponse) GetNextKey() []byte {
 	if m != nil {
 		return m.NextKey
 	}
@@ -225,38 +299,43 @@ func (m *SelectResponse) GetNextKey() []byte {
 }
 
 func init() {
-	proto.RegisterType((*KeyRange)(nil), "tipb.KeyRange")
-	proto.RegisterType((*KeyPoint)(nil), "tipb.KeyPoint")
+	proto.RegisterType((*HandleRange)(nil), "tipb.HandleRange")
 	proto.RegisterType((*SelectRequest)(nil), "tipb.SelectRequest")
 	proto.RegisterType((*Row)(nil), "tipb.Row")
 	proto.RegisterType((*SelectResponse)(nil), "tipb.SelectResponse")
+	proto.RegisterType((*KeyRange)(nil), "tipb.KeyRange")
+	proto.RegisterType((*IndexRequest)(nil), "tipb.IndexRequest")
+	proto.RegisterType((*IndexResponse)(nil), "tipb.IndexResponse")
 }
 
 var fileDescriptor3 = []byte{
-	// 398 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0x74, 0x92, 0xcf, 0x8e, 0xd3, 0x30,
-	0x10, 0xc6, 0xd5, 0x26, 0x2d, 0xd9, 0x49, 0x08, 0x95, 0xc5, 0x6a, 0xad, 0x1e, 0xa0, 0x0a, 0x62,
-	0xc5, 0x29, 0x87, 0x7d, 0x84, 0x95, 0x38, 0xac, 0xb8, 0x54, 0x85, 0x7b, 0x94, 0xa4, 0xb3, 0x89,
-	0x45, 0x62, 0x1b, 0xdb, 0x25, 0xed, 0x89, 0x17, 0xe3, 0xe1, 0xf0, 0x9f, 0xb0, 0x42, 0xc0, 0x1e,
-	0xe7, 0x9b, 0x9f, 0x3c, 0xf3, 0x7d, 0x63, 0xc8, 0x34, 0x0e, 0xd8, 0x9a, 0x52, 0x2a, 0x61, 0x04,
-	0x89, 0x0d, 0x93, 0xcd, 0x76, 0x83, 0x67, 0xa9, 0x50, 0x6b, 0x26, 0x78, 0xd0, 0xb7, 0x99, 0x6e,
-	0x7b, 0x1c, 0xeb, 0xb9, 0x4a, 0x51, 0x29, 0xa1, 0x42, 0x51, 0xbc, 0x87, 0xe4, 0x13, 0x5e, 0x0e,
-	0x35, 0xef, 0x90, 0xa4, 0x10, 0x0d, 0x62, 0xa2, 0x8b, 0xdd, 0xe2, 0x43, 0x46, 0x32, 0x88, 0x7b,
-	0xd6, 0xf5, 0x74, 0xe9, 0xaa, 0xe2, 0xc6, 0x63, 0x7b, 0xc1, 0xb8, 0x71, 0xd8, 0x57, 0xbc, 0x04,
-	0xac, 0xf8, 0xb9, 0x84, 0x97, 0x9f, 0xfd, 0x0e, 0x07, 0xfc, 0x76, 0x42, 0x6d, 0xc8, 0x06, 0x12,
-	0x6d, 0x6a, 0x65, 0x2a, 0xa3, 0x3d, 0x13, 0x91, 0x77, 0x00, 0xa6, 0x6e, 0x06, 0xac, 0x18, 0x7f,
-	0x14, 0xfe, 0xc1, 0xf4, 0xee, 0x55, 0xe9, 0x76, 0x2d, 0xbf, 0x38, 0xfd, 0xc1, 0xca, 0x0e, 0x62,
-	0xfc, 0x88, 0xe7, 0x00, 0x45, 0x7f, 0x42, 0x0f, 0x4e, 0xf7, 0xd0, 0x0e, 0xd6, 0x8f, 0x0c, 0x87,
-	0xa3, 0xa6, 0xf1, 0x2e, 0xb2, 0xc0, 0x26, 0x00, 0x1f, 0x9f, 0x0c, 0x93, 0x37, 0xb0, 0x56, 0xce,
-	0x8c, 0xa6, 0x2b, 0x4f, 0xe4, 0x81, 0x78, 0xf2, 0x68, 0xfb, 0xd2, 0xb9, 0xd0, 0x74, 0xfd, 0x57,
-	0x3f, 0x98, 0x7b, 0x0b, 0xab, 0xa9, 0x47, 0x85, 0xf4, 0x85, 0xdf, 0xe0, 0xdf, 0x01, 0x05, 0x24,
-	0x9d, 0x12, 0x27, 0x59, 0x35, 0x17, 0x9a, 0x3c, 0xc3, 0x10, 0x00, 0xdd, 0xd6, 0xbc, 0x1a, 0xd8,
-	0xc8, 0x0c, 0xbd, 0xf2, 0x21, 0xbc, 0x86, 0xcc, 0xb6, 0x4f, 0x83, 0x99, 0x55, 0x70, 0x6a, 0x71,
-	0x0d, 0xd1, 0x41, 0x4c, 0x24, 0x87, 0xf5, 0xf7, 0x7a, 0xb0, 0xf1, 0xd9, 0xc4, 0x22, 0x9b, 0xea,
-	0x0f, 0xc8, 0x7f, 0x87, 0xaa, 0xa5, 0xe0, 0x1a, 0xc9, 0x16, 0x56, 0xfe, 0x6c, 0x3e, 0xd2, 0xf4,
-	0x2e, 0x9d, 0x67, 0x3a, 0x89, 0xdc, 0x42, 0x3e, 0x32, 0x3b, 0x99, 0x77, 0xd5, 0xec, 0x7d, 0xf9,
-	0x5f, 0xef, 0x37, 0x10, 0x2b, 0x31, 0x69, 0x1b, 0xae, 0xeb, 0x5e, 0x85, 0xae, 0x1b, 0x6f, 0x4f,
-	0xc6, 0xf1, 0x6c, 0x2a, 0x77, 0xd6, 0xd8, 0x9d, 0xf5, 0xfe, 0x16, 0xae, 0x5b, 0x31, 0x96, 0xd2,
-	0xbe, 0xd9, 0xd6, 0xd2, 0x92, 0xc7, 0xc6, 0xe3, 0xf7, 0x69, 0xd8, 0x6b, 0xef, 0x3e, 0xcf, 0x7e,
-	0xf1, 0x2b, 0x00, 0x00, 0xff, 0xff, 0x1b, 0x61, 0x39, 0x7c, 0x80, 0x02, 0x00, 0x00,
+	// 443 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0x8c, 0x52, 0x4d, 0x6f, 0x13, 0x31,
+	0x10, 0x55, 0xba, 0xd9, 0x34, 0x9d, 0x75, 0xd2, 0x60, 0xa8, 0x58, 0xe5, 0x00, 0x61, 0x11, 0x28,
+	0xa7, 0x1c, 0xfa, 0x13, 0x2a, 0x21, 0x51, 0x21, 0xa1, 0x2a, 0x70, 0xe2, 0xb2, 0xda, 0x6c, 0xa6,
+	0x59, 0x0b, 0xc7, 0x36, 0xb6, 0xc3, 0x26, 0x77, 0x4e, 0xfc, 0x6a, 0xfc, 0xb1, 0x0d, 0xa0, 0x00,
+	0xe2, 0x38, 0xe3, 0x37, 0xf3, 0xde, 0xbc, 0x67, 0x20, 0x06, 0x39, 0xd6, 0x76, 0xa1, 0xb4, 0xb4,
+	0x92, 0xf6, 0x2d, 0x53, 0xab, 0xe9, 0x04, 0xf7, 0x4a, 0xa3, 0x31, 0x4c, 0x8a, 0xd8, 0x9f, 0x12,
+	0x53, 0x37, 0xb8, 0xad, 0xba, 0x2a, 0x43, 0xad, 0xa5, 0x8e, 0x45, 0x31, 0x87, 0xec, 0x6d, 0x25,
+	0xd6, 0x1c, 0x97, 0x95, 0xd8, 0x20, 0xcd, 0x20, 0xe1, 0xb2, 0xcd, 0x7b, 0xb3, 0xde, 0x3c, 0xa1,
+	0x04, 0xfa, 0x0d, 0xdb, 0x34, 0xf9, 0x99, 0xaf, 0x8a, 0xef, 0x67, 0x30, 0xfa, 0x10, 0xd8, 0x96,
+	0xf8, 0x65, 0x87, 0xc6, 0xd2, 0x09, 0x0c, 0x8d, 0xad, 0xb4, 0x2d, 0xad, 0xe9, 0x26, 0x5e, 0x02,
+	0xd8, 0x6a, 0xc5, 0xb1, 0x64, 0xe2, 0x5e, 0x86, 0xb9, 0xec, 0xfa, 0x72, 0xe1, 0x55, 0x2d, 0x3e,
+	0xfa, 0xfe, 0xad, 0x6b, 0xd3, 0x19, 0x0c, 0xee, 0x19, 0xf2, 0xb5, 0xc9, 0x93, 0x59, 0xe2, 0x00,
+	0x93, 0x08, 0x78, 0x73, 0x54, 0x4d, 0x5f, 0xc0, 0x40, 0x7b, 0x39, 0x26, 0xef, 0x07, 0xc4, 0xa3,
+	0x88, 0xf8, 0x55, 0xe8, 0x18, 0x06, 0x4a, 0x32, 0xe1, 0x98, 0x53, 0x07, 0x49, 0xe8, 0x73, 0x48,
+	0xdb, 0x06, 0x35, 0xe6, 0x83, 0x40, 0x7a, 0xba, 0xb3, 0x80, 0xe1, 0x46, 0xcb, 0x9d, 0x2a, 0x57,
+	0x87, 0xfc, 0xfc, 0x2f, 0x18, 0x0a, 0x60, 0xea, 0x4a, 0x94, 0x9c, 0x6d, 0x99, 0xcd, 0x87, 0xe1,
+	0xa4, 0x27, 0x40, 0xdc, 0xf3, 0x8e, 0xdb, 0xae, 0x7b, 0x11, 0xcc, 0xb8, 0x82, 0x64, 0x29, 0x5b,
+	0xaf, 0xe2, 0x6b, 0xc5, 0x9d, 0x19, 0xee, 0xfe, 0x64, 0x4e, 0x8a, 0x4f, 0x30, 0x7e, 0xb0, 0xc8,
+	0x28, 0x29, 0x0c, 0xd2, 0x29, 0xa4, 0xc1, 0xee, 0x60, 0x50, 0x76, 0x9d, 0x75, 0x9c, 0xbe, 0x45,
+	0x9f, 0x42, 0x5f, 0xcb, 0xf6, 0xc1, 0x86, 0x8b, 0xf8, 0xe4, 0xd7, 0x3e, 0x86, 0x4c, 0xe0, 0xde,
+	0x96, 0x4d, 0x38, 0xd8, 0x99, 0xe0, 0x29, 0x5f, 0xc1, 0xf0, 0x1d, 0x1e, 0x4e, 0x62, 0x22, 0xbf,
+	0xc5, 0x44, 0x8a, 0x6f, 0x3d, 0x20, 0xb7, 0x62, 0x8d, 0xfb, 0x7f, 0xa6, 0xc4, 0x3c, 0xe2, 0x0f,
+	0x29, 0x85, 0xc9, 0x90, 0xd2, 0xb3, 0x63, 0x06, 0x51, 0xde, 0x38, 0x02, 0x8e, 0x12, 0x7e, 0x06,
+	0xe0, 0x33, 0x22, 0x74, 0x04, 0x69, 0x34, 0x28, 0x0d, 0x6a, 0xdf, 0xc3, 0xa8, 0x53, 0xf1, 0x1f,
+	0x46, 0x5c, 0xc2, 0x79, 0x3c, 0xd5, 0x38, 0x35, 0x3e, 0x4d, 0xa7, 0x39, 0x18, 0xf0, 0x19, 0x0f,
+	0x8e, 0xde, 0x9d, 0x75, 0xf3, 0x1a, 0xae, 0x6a, 0xb9, 0x5d, 0x28, 0x26, 0x36, 0x75, 0xa5, 0xdc,
+	0xf0, 0x7a, 0x15, 0x36, 0xdc, 0x64, 0xd1, 0xf0, 0x3b, 0xff, 0x9b, 0xef, 0x7a, 0x3f, 0x02, 0x00,
+	0x00, 0xff, 0xff, 0x0a, 0x49, 0x5c, 0x40, 0x11, 0x03, 0x00, 0x00,
 }

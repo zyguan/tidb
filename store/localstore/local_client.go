@@ -62,9 +62,9 @@ func (r *localResponse) rowToBytes(row *tipb.Row) ([]byte, error) {
 
 type respIterator struct {
 	client      *localClient
-	reqSent     int64
-	respGot     int64
-	concurrency int64
+	reqSent     int
+	respGot     int
+	concurrency int
 	tasks       []*task
 	responses   []*regionResponse
 	taskChan    chan *task
