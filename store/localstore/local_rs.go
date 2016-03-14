@@ -2,17 +2,20 @@ package localstore
 
 import (
 	"bytes"
+	"strconv"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/util/hack"
+	"github.com/pingcap/tidb/terror"
+	"github.com/pingcap/tidb/util/types"
 	"github.com/pingcap/tidb/xapi/tablecodec"
 	"github.com/pingcap/tidb/xapi/tipb"
-	"strconv"
 )
 
 // local region server.
 type localRS struct {
+	store    *dbStore
 	startKey []byte
 	endKey   []byte
 }
@@ -43,7 +46,8 @@ func (rs *localRS) Handle(req *regionRequest) (*regionResponse, error) {
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		rows, err := getRowsFromSelectReq(sel)
+		txn := newTxn(rs.store, kv.Version{Ver: uint64(*sel.StartTs)})
+		rows, err := rs.getRowsFromSelectReq(txn, sel)
 		selResp := new(tipb.SelectResponse)
 		selResp.Error = toPBError(err)
 		selResp.Rows = rows
@@ -60,23 +64,136 @@ func (rs *localRS) Handle(req *regionRequest) (*regionResponse, error) {
 	return resp, nil
 }
 
-func getRowsFromSelectReq(sel *tipb.SelectRequest) ([]*tipb.Row, error) {
-	tid := sel.TableInfo.TableId
-	for _, kran := range sel.Ranges {
-		handle, err := parseInt64(kran.Low)
+// low is closed, high is open.
+type kvRange struct {
+	low  kv.Key
+	high kv.Key
+}
+
+type kvPoint struct {
+	key    kv.Key
+	handle int64
+}
+
+func (rs *localRS) getRowsFromSelectReq(txn kv.Transaction, sel *tipb.SelectRequest) ([]*tipb.Row, error) {
+	tid := sel.TableInfo.GetTableId()
+	kvRanges := rs.extractRecordKVRanges(tid, sel.Ranges)
+	kvPoints := rs.extractRecordKVPoints(tid, sel.Points)
+	var handles []int64
+	for _, ran := range kvRanges {
+		ranHandles, err := seekRangeHandles(txn, ran)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		key := tablecodec.EncodeRecordKey(tid, handle)
-
+		handles = append(handles, ranHandles...)
 	}
-	return nil, nil
+	for _, point := range kvPoints {
+		_, err := txn.Get(point.key)
+		if terror.ErrorEqual(err, kv.ErrNotExist) {
+			continue
+		}
+		handles = append(handles, point.handle)
+	}
+	tablecodec.SortHandles(handles)
+	var rows []*tipb.Row
+	for _, h := range handles {
+		row, err := rs.getRowFromHandle(txn, tid, h, sel.TableInfo.Columns)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
-func parseInt64(b []byte) (int64, error) {
-	return strconv.ParseInt(hack.String(b), 10, 64)
+func (rs *localRS) extractRecordKVRanges(tid int64, krans []*tipb.HandleRange) []kvRange {
+	var kvRanges []kvRange
+	for _, kran := range krans {
+		upperKey := tablecodec.EncodeRecordKey(tid, kran.GetHigh(), 0)
+		if bytes.Compare(upperKey, rs.startKey) <= 0 {
+			continue
+		}
+		lowerKey := tablecodec.EncodeRecordKey(tid, kran.GetLow(), 0)
+		if bytes.Compare(lowerKey, rs.endKey) >= 0 {
+			continue
+		}
+		var kvr kvRange
+		if bytes.Compare(lowerKey, rs.startKey) <= 0 {
+			kvr.low = rs.startKey
+		} else {
+			kvr.low = lowerKey
+		}
+		if bytes.Compare(upperKey, rs.endKey) <= 0 {
+			kvr.high = upperKey
+		} else {
+			kvr.high = rs.endKey
+		}
+		kvRanges = append(kvRanges, kvr)
+	}
+	return kvRanges
+}
+
+func (rs *localRS) extractRecordKVPoints(tid int64, points []int64) []kvPoint {
+	var kvPoints []kvPoint
+	for _, point := range points {
+		kvKey := tablecodec.EncodeRecordKey(tid, point, 0)
+		if kvKey.Cmp(kv.Key(rs.startKey)) < 0 {
+			continue
+		}
+		if kvKey.Cmp(kv.Key(rs.endKey)) >= 0 {
+			continue
+		}
+		kvPoints = append(kvPoints, kvPoint{key: kvKey, handle: point})
+	}
+	return kvPoints
+}
+
+func (rs *localRS) getRowFromHandle(txn kv.Transaction, tid, h int64, columns []*tipb.ColumnInfo) (*tipb.Row, error) {
+	row := new(tipb.Row)
+	for _, col := range columns {
+		if *col.PkHandle {
+			row.Values = append(row.Values, strconv.AppendInt(nil, h, 10))
+		} else {
+			key := tablecodec.EncodeRecordKey(tid, h, col.GetColumnId())
+			data, err := txn.Get(key)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			value, err := tablecodec.DecodeValue(data, col)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			row.Values = append(row.Values, datumToBytes(value))
+		}
+	}
+	return row, nil
+}
+
+func datumToBytes(d types.Datum) []byte {
+	return nil
 }
 
 func toPBError(err error) *tipb.Error {
 	return nil
+}
+
+func seekRangeHandles(txn kv.Transaction, ran kvRange) ([]int64, error) {
+	seekKey := ran.low
+	var handles []int64
+	for {
+		it, err := txn.Seek(seekKey)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if !it.Valid() || it.Key().Cmp(ran.high) >= 0 {
+			break
+		}
+		tid, h, _, err := tablecodec.DecodeRecordKey(it.Key())
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		handles = append(handles, h)
+		seekKey = tablecodec.EncodeRecordKey(tid, h+1, 0)
+	}
+	return handles, nil
 }

@@ -132,3 +132,11 @@ func (txn *dbTxn) LockKeys(keys ...kv.Key) error {
 	}
 	return nil
 }
+
+func (txn *dbTxn) GetClient() kv.Client {
+	return &localClient{regionInfo: pd.GetRegionInfo()}
+}
+
+func (txn *dbTxn) StartTS() int64 {
+	return int64(txn.tid)
+}

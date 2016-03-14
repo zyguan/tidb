@@ -154,3 +154,11 @@ func (txn *hbaseTxn) LockKeys(keys ...kv.Key) error {
 	}
 	return nil
 }
+
+func (txn *hbaseTxn) GetClient() kv.Client {
+	return nil
+}
+
+func (txn *hbaseTxn) StartTS() int64 {
+	return int64(txn.tid)
+}
