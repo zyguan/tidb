@@ -124,13 +124,15 @@ func (b *executorBuilder) buildTableScan(v *plan.TableScan) Executor {
 		b.err = err
 		return nil
 	}
+	table, _ := b.is.TableByID(v.Table.ID)
 	client := txn.GetClient()
 	if client.SupportRequestType(kv.ReqTypeSelect, 0) {
 		e := &XSelectTableExec{
+			table:     table,
 			ctx:       b.ctx,
 			tablePlan: v,
 		}
-		where := conditionsToPBExpression(v.FilterConditions)
+		where := conditionsToPBExpression(v.FilterConditions...)
 		if xapi.SupportExpression(client, where) {
 			e.where = where
 			return e
@@ -138,7 +140,6 @@ func (b *executorBuilder) buildTableScan(v *plan.TableScan) Executor {
 		return b.buildFilter(e, v.FilterConditions)
 	}
 
-	table, _ := b.is.TableByID(v.Table.ID)
 	e := &TableScanExec{
 		t:          table,
 		fields:     v.Fields(),
@@ -176,20 +177,21 @@ func (b *executorBuilder) buildIndexScan(v *plan.IndexScan) Executor {
 		b.err = err
 		return nil
 	}
+	tbl, _ := b.is.TableByID(v.Table.ID)
 	client := txn.GetClient()
 	if client.SupportRequestType(kv.ReqTypeSelect, 0) {
 		e := &XSelectIndexExec{
+			table:     tbl,
 			ctx:       b.ctx,
 			indexPlan: v,
 		}
-		where := conditionsToPBExpression(v.FilterConditions)
+		where := conditionsToPBExpression(v.FilterConditions...)
 		if xapi.SupportExpression(client, where) {
 			e.where = where
 			return e
 		}
 		return b.buildFilter(e, v.FilterConditions)
 	}
-	tbl, _ := b.is.TableByID(v.Table.ID)
 	var idx *column.IndexedCol
 	for _, val := range tbl.Indices() {
 		if val.IndexInfo.Name.L == v.Index.Name.L {

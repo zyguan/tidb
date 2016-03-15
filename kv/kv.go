@@ -13,6 +13,8 @@
 
 package kv
 
+import "io"
+
 const (
 	// PresumeKeyNotExists directives that when dealing with a Get operation but failing to read data from cache,
 	// we presume that the key does not exist in Store. The actual existence will be checked before the
@@ -95,13 +97,18 @@ const (
 	ReqTypeSelect = 100
 )
 
+type KeyRange struct {
+	StartKey Key
+	EndKey   Key
+}
+
 // Request represents a kv request.
 type Request struct {
 	// The request type.
-	Tp       int64
-	Data     []byte
-	StartKey []byte
-	EndKey   []byte
+	Tp   int64
+	Data []byte
+	// Key Ranges
+	KeyRanges []KeyRange
 	// If desc is true, the request is sent in descending order.
 	Desc bool
 	// If concurrency is 1, it only sends the request to a single storage node when
@@ -114,7 +121,7 @@ type Request struct {
 type ResponseIterator interface {
 	// Next returns the response from a single storage node.
 	// When all storage nodes returned responses, nil is returned.
-	Next() (resp []byte, err error)
+	Next() (resp io.ReadCloser, err error)
 }
 
 // Snapshot defines the interface for the snapshot fetched from KV store.

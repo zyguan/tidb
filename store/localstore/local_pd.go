@@ -24,7 +24,7 @@ func ChangeRegionInfo(regionId int, startKey, endKey []byte) {
 		if region.rs.id == regionId {
 			newRegionInfo := &regionInfo{
 				startKey: startKey,
-				endKey: endKey,
+				endKey:   endKey,
 			}
 			newRegionInfo.rs = region.rs
 			region.rs.startKey = startKey

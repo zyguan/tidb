@@ -2,13 +2,12 @@ package localstore
 
 import (
 	"bytes"
-	"strconv"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/terror"
-	"github.com/pingcap/tidb/util/types"
+	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/xapi/tablecodec"
 	"github.com/pingcap/tidb/xapi/tipb"
 )
@@ -151,53 +150,20 @@ func (rs *localRS) extractRecordKVPoints(tid int64, points []int64) []kvPoint {
 
 func (rs *localRS) getRowFromHandle(txn kv.Transaction, tid, h int64, columns []*tipb.ColumnInfo) (*tipb.Row, error) {
 	row := new(tipb.Row)
+	row.Handle = &h
 	for _, col := range columns {
 		if *col.PkHandle {
-			row.Values = append(row.Values, strconv.AppendInt(nil, h, 10))
+			row.Data = codec.EncodeVarint(row.Data, h)
 		} else {
 			key := tablecodec.EncodeRecordKey(tid, h, col.GetColumnId())
 			data, err := txn.Get(key)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
-			value, err := tablecodec.DecodeValue(data, col)
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-			row.Values = append(row.Values, datumToBytes(value))
+			row.Data = append(row.Data, data...)
 		}
 	}
 	return row, nil
-}
-
-func datumToBytes(d types.Datum) []byte {
-	switch d.Kind() {
-	case types.KindNull:
-		return []byte{}
-	case types.KindInt64:
-		return strconv.AppendInt(nil, d.GetInt64(), 10)
-	case types.KindFloat32:
-		return strconv.AppendFloat(nil, d.GetFloat64(), 'f', -1, 32)
-	case types.KindFloat64:
-		return strconv.AppendFloat(nil, d.GetFloat64(), 'f', -1, 64)
-	case types.KindBytes, types.KindString:
-		return d.GetBytes()
-	case types.KindMysqlBit:
-		return []byte(d.GetMysqlBit().ToString())
-	case types.KindMysqlDecimal:
-		return []byte(d.GetMysqlDecimal().String())
-	case types.KindMysqlDuration:
-		return []byte(d.GetMysqlDuration().String())
-	case types.KindMysqlEnum:
-		return []byte(d.GetMysqlEnum().String())
-	case types.KindMysqlHex:
-		return []byte(d.GetMysqlHex().ToString())
-	case types.KindMysqlSet:
-		return []byte(d.GetMysqlSet().String())
-	case types.KindMysqlTime:
-		return []byte(d.GetMysqlTime().String())
-	}
-	return nil
 }
 
 func toPBError(err error) *tipb.Error {
@@ -233,22 +199,22 @@ func seekRangeHandles(txn kv.Transaction, ran kvRange) ([]int64, error) {
 func buildLocalRegionServers(store *dbStore) []*localRS {
 	return []*localRS{
 		{
-			id: 1,
-			store: store,
+			id:       1,
+			store:    store,
 			startKey: []byte(""),
-			endKey: []byte("t"),
+			endKey:   []byte("t"),
 		},
 		{
-			id: 2,
-			store: store,
+			id:       2,
+			store:    store,
 			startKey: []byte("t"),
-			endKey: []byte("u"),
+			endKey:   []byte("u"),
 		},
 		{
-			id: 3,
-			store: store,
+			id:       3,
+			store:    store,
 			startKey: []byte("u"),
-			endKey: []byte("z"),
+			endKey:   []byte("z"),
 		},
 	}
 }

@@ -1,6 +1,13 @@
 package localstore
 
-import "github.com/pingcap/tidb/kv"
+import (
+	"io"
+
+	"github.com/golang/protobuf/proto"
+	"github.com/juju/errors"
+	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/xapi/tipb"
+)
 
 type localClient struct {
 	regionInfo []*regionInfo
@@ -32,6 +39,36 @@ func (c *localClient) updateRegionInfo() {
 	c.regionInfo = pd.GetRegionInfo()
 }
 
+type localResponseReader struct {
+	s []byte
+	i int64
+}
+
+func (r *localResponseReader) Read(b []byte) (n int, err error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
+	if r.i >= int64(len(r.s)) {
+		return 0, io.EOF
+	}
+	n = copy(b, r.s[r.i:])
+	r.i += int64(n)
+	return
+}
+
+func (r *localResponseReader) Close() error {
+	r.i = int64(len(r.s))
+	return nil
+}
+
+func (r *localResponseReader) rowToBytes(row *tipb.Row) ([]byte, error) {
+	bs, err := proto.Marshal(row)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return bs, err
+}
+
 type respIterator struct {
 	client      *localClient
 	reqSent     int
@@ -50,7 +87,7 @@ type task struct {
 	region  *localRS
 }
 
-func (it *respIterator) Next() (resp []byte, err error) {
+func (it *respIterator) Next() (resp io.ReadCloser, err error) {
 	if it.finished {
 		return nil, nil
 	}
@@ -76,7 +113,7 @@ func (it *respIterator) Next() (resp []byte, err error) {
 	if it.reqSent == len(it.tasks) && it.respGot == it.reqSent {
 		it.Close()
 	}
-	return regionResp.data, nil
+	return &localResponseReader{s: regionResp.data}, nil
 }
 
 func (it *respIterator) createRetryTasks(resp *regionResponse) []*task {

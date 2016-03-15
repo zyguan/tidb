@@ -360,7 +360,7 @@ func (d Driver) Open(path string) (kv.Storage, error) {
 	region_servers = buildLocalRegionServers(s)
 	var infos []*regionInfo
 	for _, rs := range region_servers {
-		ri := &regionInfo{startKey:rs.startKey, endKey:rs.endKey, rs: rs}
+		ri := &regionInfo{startKey: rs.startKey, endKey: rs.endKey, rs: rs}
 		infos = append(infos, ri)
 	}
 	pd.SetRegionInfo(infos)

@@ -9,11 +9,15 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/optimizer/plan"
+	"github.com/pingcap/tidb/table"
+	"github.com/pingcap/tidb/util/types"
 	"github.com/pingcap/tidb/xapi"
 	"github.com/pingcap/tidb/xapi/tipb"
+	"math"
 )
 
 type XSelectTableExec struct {
+	table     table.Table
 	tablePlan *plan.TableScan
 	where     *tipb.Expression
 	ctx       context.Context
@@ -27,11 +31,11 @@ func (e *XSelectTableExec) Next() (*Row, error) {
 			return nil, errors.Trace(err)
 		}
 	}
-	resultRow, err := e.result.Next()
+	h, rowData, err := e.result.Next()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	return resultRowToRow(resultRow), nil
+	return resultRowToRow(e.table, h, rowData), nil
 }
 
 func (e *XSelectTableExec) Fields() []*ast.ResultField {
@@ -39,11 +43,15 @@ func (e *XSelectTableExec) Fields() []*ast.ResultField {
 }
 
 func (e *XSelectTableExec) Close() error {
+	if e.result != nil {
+		e.result.Close()
+	}
 	return nil
 }
 
-func resultRowToRow(resultRow [][]byte) *Row {
-	return nil
+func resultRowToRow(t table.Table, h int64, data []types.Datum) *Row {
+	entry := &RowKeyEntry{Handle: h, Tbl: t}
+	return &Row{Data: data, RowKeys: []*RowKeyEntry{entry}}
 }
 
 func (e *XSelectTableExec) doRequest() error {
@@ -66,6 +74,7 @@ func (e *XSelectTableExec) doRequest() error {
 }
 
 type XSelectIndexExec struct {
+	table     table.Table
 	indexPlan *plan.IndexScan
 	ctx       context.Context
 	where     *tipb.Expression
@@ -92,6 +101,10 @@ func (e *XSelectIndexExec) Next() (*Row, error) {
 	return row, nil
 }
 
+func (e *XSelectIndexExec) Close() error {
+	return nil
+}
+
 func (e *XSelectIndexExec) doRequest() error {
 	txn, err := e.ctx.GetTxn(false)
 	if err != nil {
@@ -111,7 +124,7 @@ func (e *XSelectIndexExec) doRequest() error {
 	}
 	sort.Sort(Int64Slice(handles))
 	tblResult, err := e.doTableRequest(txn, handles)
-	rawRows, err := extractRawRowsFromTableResult(tblResult)
+	unorderedRows, err := extractRowsFromTableResult(e.table, tblResult)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -119,19 +132,19 @@ func (e *XSelectIndexExec) doRequest() error {
 	rows := make([]*Row, len(handles))
 	for i, h := range handles {
 		oi := indexOrder[h]
-		rows[oi] = rawRowToRow(h, rawRows[i])
+		rows[oi] = unorderedRows[i]
 	}
 	e.rows = rows
 	return nil
 }
 
 func (e *XSelectIndexExec) doIndexRequest(txn kv.Transaction) (*xapi.SelectResult, error) {
-	selIdxReq := new(tipb.SelectRequest)
+	selIdxReq := new(tipb.IndexRequest)
 	startTs := txn.StartTS()
 	selIdxReq.StartTs = &startTs
 	selIdxReq.IndexInfo = indexInfoToPBIndexInfo(e.indexPlan.Index)
 	selIdxReq.Ranges, selIdxReq.Points = indexRangesToPBRangesAndPoints(e.indexPlan.Ranges)
-	return xapi.Select(txn.GetClient(), selIdxReq, 1)
+	return xapi.SelectIndex(txn.GetClient(), selIdxReq, 1)
 }
 
 func (e *XSelectIndexExec) doTableRequest(txn kv.Transaction, handles []int64) (*xapi.SelectResult, error) {
@@ -140,8 +153,8 @@ func (e *XSelectIndexExec) doTableRequest(txn kv.Transaction, handles []int64) (
 	selTableReq.StartTs = &startTs
 	selTableReq.TableInfo = tableInfoToPBTableInfo(e.indexPlan.Table)
 	selTableReq.Fields = resultFieldsToPBExpression(e.indexPlan.Fields())
-	selTableReq.Points = handlesToPoints(handles)
-	selTableReq.Where = conditionsToPBExpression(e.indexPlan.FilterConditions)
+	selTableReq.Points = handles
+	selTableReq.Where = conditionsToPBExpression(e.indexPlan.FilterConditions...)
 	return xapi.Select(txn.GetClient(), selTableReq, 10)
 }
 
@@ -153,8 +166,25 @@ func resultFieldsToPBExpression(fields []*ast.ResultField) []*tipb.Expression {
 	return nil
 }
 
-func tableRangeToPBRangesAndPoints(tableRanges []plan.TableRange) ([]*tipb.KeyRange, []*tipb.KeyPoint) {
-	return nil, nil
+func tableRangeToPBRangesAndPoints(tableRanges []plan.TableRange) ([]*tipb.HandleRange, []int64) {
+	hrs := make([]*tipb.HandleRange, 0, len(tableRanges))
+	var handlePoints []int64
+	for _, ran := range tableRanges {
+		if ran.LowVal == ran.HighVal {
+			handlePoints = append(handlePoints, ran.LowVal)
+		} else {
+			hr := new(tipb.HandleRange)
+			lowVal := ran.LowVal
+			hr.Low = &lowVal
+			hiVal := ran.HighVal
+			if hiVal != math.MaxInt64 {
+				hiVal++
+			}
+			hr.High = &hiVal
+			hrs = append(hrs, hr)
+		}
+	}
+	return hrs, handlePoints
 }
 
 func tableInfoToPBTableInfo(tbInfo *model.TableInfo) *tipb.TableInfo {
@@ -165,24 +195,28 @@ func indexInfoToPBIndexInfo(idxInfo *model.IndexInfo) *tipb.IndexInfo {
 	return nil
 }
 
-func indexRangesToPBRangesAndPoints(ranges []*plan.IndexRange) ([]*tipb.KeyRange, []*tipb.KeyPoint) {
+func indexRangesToPBRangesAndPoints(ranges []*plan.IndexRange) ([]*tipb.KeyRange, [][]byte) {
 	return nil, nil
 }
 
-func extractHandlesFromIndexResult(idxResult *xapi.SelectResult) []int64 {
-	return nil
+func extractHandlesFromIndexResult(idxResult *xapi.SelectResult) ([]int64, error) {
+	return nil, nil
 }
 
-func extractRawRowsFromTableResult(tblResult *xapi.SelectResult) []*tipb.Row {
-	return nil
-}
-
-func handlesToPoints(handles []int64) []*tipb.KeyPoint {
-	return nil
-}
-
-func rawRowToRow(h int64, row [][]byte) *Row {
-	return nil
+func extractRowsFromTableResult(t table.Table, tblResult *xapi.SelectResult) ([]*Row, error) {
+	var rows []*Row
+	for {
+		h, rowData, err := tblResult.Next()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if rowData == nil {
+			break
+		}
+		row := resultRowToRow(t, h, rowData)
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 type Int64Slice []int64
