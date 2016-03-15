@@ -78,7 +78,7 @@ type task struct {
 	region  *localRS
 }
 
-func (it *respIterator) Next() (resp []byte, err error) {
+func (it *respIterator) Next() (resp *kv.Response, err error) {
 	if it.finished {
 		return nil, nil
 	}
@@ -110,7 +110,7 @@ func (it *respIterator) Next() (resp []byte, err error) {
 		it.Close()
 		return nil, errors.Trace(err)
 	}
-	lr := localResponse{
+	lr := &localResponse{
 		rows: rs.Rows,
 	}
 	return lr, nil

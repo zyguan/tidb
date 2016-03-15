@@ -127,7 +127,7 @@ type Response interface {
 type ResponseIterator interface {
 	// Next returns the response from a single storage node.
 	// When all storage nodes returned responses, nil is returned.
-	Next() (resp Response, err error)
+	Next() (resp *Response, err error)
 }
 
 // Snapshot defines the interface for the snapshot fetched from KV store.

@@ -1,16 +1,46 @@
 package xapi
 
 import (
+	"github.com/juju/errors"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/util/types"
 	"github.com/pingcap/tidb/xapi/tablecodec"
 	"github.com/pingcap/tidb/xapi/tipb"
 )
 
 // SelectResult is used to get response rows from SelectRequest.
 type SelectResult struct {
+	iter     kv.ResponseIterator
+	resp     *kv.Response
+	finished bool
 }
 
-func (r *SelectResult) Next() (row [][]byte, err error) {
+func (r *SelectResult) Next() ([]byte, error) {
+	if r.finished {
+		return nil, nil
+	}
+	for {
+		var err error
+		if r.resp == nil {
+			r.resp, err = r.iter.Next()
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			if r.resp == nil {
+				r.finished = true
+				return nil, nil
+			}
+		}
+		row, err := r.resp.Next()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if row == nil {
+			r.resp = nil
+			continue
+		}
+		return row, err
+	}
 	return nil, nil
 }
 
@@ -21,7 +51,7 @@ func Select(client kv.Client, req *tipb.SelectRequest, concurrency int) (*Select
 		return nil, error.Trace(err)
 	}
 	repIter := client.Send(kvReq)
-	return nil, nil
+	return &SelectResult{iter: repIter}, nil
 }
 
 // Convert tipb.Request to kv.Request
@@ -32,14 +62,13 @@ func composeRequest(req *tipbSelectRequest, concurrency int) (*kv.Request, error
 	}
 	keyRanges := make([]*kv.KeyRange, 0, len(req.GetRanges())+len(req.GetPoints))
 	// Compose startkey/endkey
-	idx := req.GetIndexInfo()
 	tbl := req.GetTableInfo()
 
 	// Convert KeyRanges
 	for _, r := range req.GetRanges() {
 		// Convert range to kv.KeyRange
-		start := tablecodec.EncodeRowKey(r.GetLow())
-		end := tablecodec.EncodeRowKey(r.GetHigh())
+		start := tablecodec.EncodeRecordKey(r.GetLow())
+		end := tablecodec.EncodeRecordKey(r.GetHigh() + 1)
 		nr := &kv.KeyRange{
 			StartKey: start,
 			EndKey:   end,
@@ -48,10 +77,8 @@ func composeRequest(req *tipbSelectRequest, concurrency int) (*kv.Request, error
 	// Convert KeyPoints
 	for _, p := range req.GetPoints() {
 		// Convert KeyPoint to kv.KeyRange
-		start := tablecodec.EncodeRowKey(p.Key)
-		// TODO: check this?
-		//endKey := append(p.Key, []byte{'\0'})
-		end := tablecodec.EncodeRowKey(endKey)
+		start := tablecodec.EncodeRecordKey(p)
+		end := tablecodec.EncodeRecordKey(p + 1)
 		nr := &kv.KeyRange{
 			StartKey: start,
 			EndKey:   end,
@@ -67,18 +94,7 @@ func composeRequest(req *tipbSelectRequest, concurrency int) (*kv.Request, error
 	return kvReq, nil
 }
 
-func encodeKey(key []byte, tbl *tipb.TableInfo, idx *tipb.IndexInfo) kv.Key {
-	/*
-		if tbl != nil {
-			// TODO: convert
-			rid := int64(0)
-			return tablecodec.EncodeRecordKey(tbl.GetTableId(), rid, 0)
-		}
-		return tablecodec.EncodeIndexKey(idx.GetTableId(), key)
-	*/
-	return kv.Key{}
-}
-
+// Sort KeyRange
 type keyRangeSorter struct {
 	ranges []kv.KeyRange
 	err    error
@@ -91,9 +107,7 @@ func (r *keyRangeSorter) Len() int {
 func (r *keyRangeSorter) Less(i, j int) bool {
 	a := r.ranges[i]
 	b := r.ranges[j]
-	//cmp, err := a.value.CompareDatum(b.value)
-	cmp := 0
-	err := nil
+	cmp, err := types.Compare(a, b)
 	if err != nil {
 		r.err = err
 		return true
