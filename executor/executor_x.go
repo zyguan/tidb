@@ -188,6 +188,7 @@ func tableRangeToPBRangesAndPoints(tableRanges []plan.TableRange) ([]*tipb.Handl
 }
 
 func tableInfoToPBTableInfo(tbInfo *model.TableInfo) *tipb.TableInfo {
+	return xapi.TableToProto(tbInfo)
 	return nil
 }
 
