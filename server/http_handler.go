@@ -44,6 +44,7 @@ import (
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/model"
 	"github.com/pingcap/tidb/parser/terror"
 	"github.com/pingcap/tidb/session"
@@ -998,7 +999,7 @@ func getSchemaTablesStorageInfo(h *schemaStorageHandler, schema *model.CIStr, ta
 		defer terror.Call(results.Close)
 		for {
 			req := results.NewChunk(nil)
-			if err = results.Next(context.TODO(), req); err != nil {
+			if err = results.Next(metrics.InternalContext("HTTP"), req); err != nil {
 				break
 			}
 

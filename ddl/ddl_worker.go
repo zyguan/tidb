@@ -111,7 +111,7 @@ type JobContext struct {
 // NewJobContext returns a new ddl job context.
 func NewJobContext() *JobContext {
 	return &JobContext{
-		ddlJobCtx:          context.Background(),
+		ddlJobCtx:          metrics.InternalContext("DDL"),
 		cacheSQL:           "",
 		cacheNormalizedSQL: "",
 		cacheDigest:        nil,

@@ -345,7 +345,7 @@ func (w *GCWorker) prepare() (bool, uint64, error) {
 	// 3. The user gets `tikv_gc_safe_point` value is t1, then the user thinks the data after time t1 won't be clean by GC.
 	// 4. GC update `tikv_gc_safe_point` value to t2, continue do GC in this round.
 	// Then the data record that has been dropped between time t1 and t2, will be cleaned by GC, but the user thinks the data after t1 won't be clean by GC.
-	ctx := context.Background()
+	ctx := metrics.InternalContext("GC")
 	se := createSession(w.store)
 	defer se.Close()
 	_, err := se.ExecuteInternal(ctx, "BEGIN")
@@ -1688,7 +1688,7 @@ func (w *GCWorker) checkLeader() (bool, error) {
 	se := createSession(w.store)
 	defer se.Close()
 
-	ctx := context.Background()
+	ctx := metrics.InternalContext("GC")
 	_, err := se.ExecuteInternal(ctx, "BEGIN")
 	if err != nil {
 		return false, errors.Trace(err)
@@ -1819,7 +1819,7 @@ func (w *GCWorker) loadDurationWithDefault(key string, def time.Duration) (*time
 }
 
 func (w *GCWorker) loadValueFromSysTable(key string) (string, error) {
-	ctx := context.Background()
+	ctx := metrics.InternalContext("GC")
 	se := createSession(w.store)
 	defer se.Close()
 	rs, err := se.ExecuteInternal(ctx, `SELECT HIGH_PRIORITY (variable_value) FROM mysql.tidb WHERE variable_name=%? FOR UPDATE`, key)
@@ -1852,7 +1852,7 @@ func (w *GCWorker) saveValueToSysTable(key, value string) error {
 			       UPDATE variable_value = %?, comment = %?`
 	se := createSession(w.store)
 	defer se.Close()
-	_, err := se.ExecuteInternal(context.Background(), stmt,
+	_, err := se.ExecuteInternal(metrics.InternalContext("GC"), stmt,
 		key, value, gcVariableComments[key],
 		value, gcVariableComments[key])
 	logutil.BgLogger().Debug("[gc worker] save kv",
@@ -1881,7 +1881,7 @@ func (w *GCWorker) doGCPlacementRules(safePoint uint64, dr util.DelRangeTask, gc
 		}
 	})
 	if historyJob == nil {
-		err = kv.RunInNewTxn(context.Background(), w.store, false, func(ctx context.Context, txn kv.Transaction) error {
+		err = kv.RunInNewTxn(metrics.InternalContext("GC"), w.store, false, func(ctx context.Context, txn kv.Transaction) error {
 			var err1 error
 			t := meta.NewMeta(txn)
 			historyJob, err1 = t.GetHistoryDDLJob(dr.JobID)
@@ -1929,7 +1929,7 @@ func (w *GCWorker) doGCPlacementRules(safePoint uint64, dr util.DelRangeTask, gc
 		logutil.BgLogger().Info("try delete TiFlash pd rule",
 			zap.Int64("tableID", id), zap.String("endKey", string(dr.EndKey)), zap.Uint64("safePoint", safePoint))
 		ruleID := fmt.Sprintf("table-%v-r", id)
-		if err := infosync.DeleteTiFlashPlacementRule(context.Background(), "tiflash", ruleID); err != nil {
+		if err := infosync.DeleteTiFlashPlacementRule(metrics.InternalContext("GC"), "tiflash", ruleID); err != nil {
 			// If DeletePlacementRule fails here, the rule will be deleted in `HandlePlacementRuleRoutine`.
 			logutil.BgLogger().Error("delete TiFlash pd rule failed when gc",
 				zap.Error(err), zap.String("ruleID", ruleID), zap.Uint64("safePoint", safePoint))
@@ -1956,7 +1956,7 @@ func (w *GCWorker) doGCLabelRules(dr util.DelRangeTask) (err error) {
 		}
 	})
 	if historyJob == nil {
-		err = kv.RunInNewTxn(context.Background(), w.store, false, func(ctx context.Context, txn kv.Transaction) error {
+		err = kv.RunInNewTxn(metrics.InternalContext("GC"), w.store, false, func(ctx context.Context, txn kv.Transaction) error {
 			var err1 error
 			t := meta.NewMeta(txn)
 			historyJob, err1 = t.GetHistoryDDLJob(dr.JobID)

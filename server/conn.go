@@ -1041,6 +1041,7 @@ func (cc *clientConn) initConnect(ctx context.Context) error {
 // it will be recovered and log the panic error.
 // This function returns and the connection is closed if there is an IO error or there is a panic.
 func (cc *clientConn) Run(ctx context.Context) {
+	ctx = metrics.WithExecRoot(ctx, cc.connectionID > 0)
 	const size = 4096
 	defer func() {
 		r := recover()
@@ -1435,6 +1436,7 @@ func (cc *clientConn) writeStats(ctx context.Context) error {
 func (cc *clientConn) useDB(ctx context.Context, db string) (err error) {
 	// if input is "use `SELECT`", mysql client just send "SELECT"
 	// so we add `` around db.
+	ctx = metrics.WithExecRoot(ctx, cc.connectionID > 0)
 	stmts, err := cc.ctx.Parse(ctx, "use `"+db+"`")
 	if err != nil {
 		return err

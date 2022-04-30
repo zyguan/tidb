@@ -1032,8 +1032,11 @@ func (s *session) checkTxnAborted(stmt sqlexec.Statement) error {
 }
 
 func (s *session) retry(ctx context.Context, maxCnt uint) (err error) {
+	startTime := time.Now()
+	ctx, observe := metrics.WithExecSpan(ctx, "Retry")
 	var retryCnt uint
 	defer func() {
+		observe(time.Since(startTime).Seconds())
 		s.sessionVars.RetryInfo.Retrying = false
 		// retryCnt only increments on retryable error, so +1 here.
 		metrics.SessionRetry.Observe(float64(retryCnt + 1))
@@ -1437,6 +1440,7 @@ func (s *session) ClearDiskFullOpt() {
 }
 
 func (s *session) ExecuteInternal(ctx context.Context, sql string, args ...interface{}) (rs sqlexec.RecordSet, err error) {
+	ctx = metrics.WithExecRoot(ctx, false)
 	origin := s.sessionVars.InRestrictedSQL
 	s.sessionVars.InRestrictedSQL = true
 	defer func() {
@@ -1600,6 +1604,7 @@ func ParseWithParams4Test(ctx context.Context, s Session,
 // ExecRestrictedStmt implements RestrictedSQLExecutor interface.
 func (s *session) ExecRestrictedStmt(ctx context.Context, stmtNode ast.StmtNode, opts ...sqlexec.OptionFuncAlias) (
 	[]chunk.Row, []*ast.ResultField, error) {
+	ctx = metrics.WithExecRoot(ctx, false, "Restricted")
 	if topsqlstate.TopSQLEnabled() {
 		defer pprof.SetGoroutineLabels(ctx)
 	}
@@ -1771,7 +1776,7 @@ func (s *session) withRestrictedSQLExecutor(ctx context.Context, opts []sqlexec.
 }
 
 func (s *session) ExecRestrictedSQL(ctx context.Context, opts []sqlexec.OptionFuncAlias, sql string, params ...interface{}) ([]chunk.Row, []*ast.ResultField, error) {
-	return s.withRestrictedSQLExecutor(ctx, opts, func(ctx context.Context, se *session) ([]chunk.Row, []*ast.ResultField, error) {
+	return s.withRestrictedSQLExecutor(metrics.WithExecRoot(ctx, false, "Restricted"), opts, func(ctx context.Context, se *session) ([]chunk.Row, []*ast.ResultField, error) {
 		stmt, err := se.ParseWithParams(ctx, sql, params...)
 		if err != nil {
 			return nil, nil, errors.Trace(err)
@@ -2044,13 +2049,14 @@ type execStmtResult struct {
 
 func (rs *execStmtResult) Close() error {
 	se := rs.se
+	ctx := metrics.WithExecRoot(context.Background(), rs.se.sessionVars.ConnectionID > 0)
 	if err := rs.RecordSet.Close(); err != nil {
-		return finishStmt(context.Background(), se, err, rs.sql)
+		return finishStmt(ctx, se, err, rs.sql)
 	}
 	if err := resetCTEStorageMap(se); err != nil {
-		return finishStmt(context.Background(), se, err, rs.sql)
+		return finishStmt(ctx, se, err, rs.sql)
 	}
-	return finishStmt(context.Background(), se, nil, rs.sql)
+	return finishStmt(ctx, se, nil, rs.sql)
 }
 
 func resetCTEStorageMap(se *session) error {

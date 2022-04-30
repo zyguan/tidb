@@ -355,7 +355,10 @@ func IsFastPlan(p plannercore.Plan) bool {
 // like the INSERT, UPDATE statements, it executes in this function, if the Executor returns
 // result, execution is done after this function returns, in the returned sqlexec.RecordSet Next method.
 func (a *ExecStmt) Exec(ctx context.Context) (_ sqlexec.RecordSet, err error) {
+	startTime := time.Now()
+	ctx, observe := metrics.WithExecSpan(ctx, "Execute")
 	defer func() {
+		observe(time.Since(startTime).Seconds())
 		r := recover()
 		if r == nil {
 			if a.retryCount > 0 {
@@ -592,6 +595,9 @@ func (c *chunkRowRecordSet) Close() error {
 }
 
 func (a *ExecStmt) handlePessimisticSelectForUpdate(ctx context.Context, e Executor) (sqlexec.RecordSet, error) {
+	startTime := time.Now()
+	ctx, observe := metrics.WithExecSpan(ctx, "PessimisticSelectForUpdate")
+	defer func() { observe(time.Since(startTime).Seconds()) }()
 	for {
 		rs, err := a.runPessimisticSelectForUpdate(ctx, e)
 		e, err = a.handlePessimisticLockError(ctx, err)
@@ -666,6 +672,9 @@ func (a *ExecStmt) handleNoDelayExecutor(ctx context.Context, e Executor) (sqlex
 }
 
 func (a *ExecStmt) handlePessimisticDML(ctx context.Context, e Executor) error {
+	startTime := time.Now()
+	ctx, observe := metrics.WithExecSpan(ctx, "PessimisticDML")
+	defer func() { observe(time.Since(startTime).Seconds()) }()
 	sctx := a.Ctx
 	// Do not active the transaction here.
 	// When autocommit = 0 and transaction in pessimistic mode,

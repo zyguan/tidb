@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/tidb/config"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/model"
 	"github.com/pingcap/tidb/parser/terror"
 	"github.com/pingcap/tidb/session/txninfo"
@@ -325,7 +326,12 @@ func ResetMockAutoRandIDRetryCount(failTimes int64) {
 
 // Commit overrides the Transaction interface.
 func (txn *LazyTxn) Commit(ctx context.Context) error {
-	defer txn.reset()
+	startTime := time.Now()
+	ctx, observe := metrics.WithExecSpan(ctx, "Commit")
+	defer func() {
+		txn.reset()
+		observe(time.Since(startTime).Seconds())
+	}()
 	if len(txn.mutations) != 0 || txn.countHint() != 0 {
 		logutil.BgLogger().Error("the code should never run here",
 			zap.String("TxnState", txn.GoString()),
@@ -380,6 +386,8 @@ func (txn *LazyTxn) Rollback() error {
 func (txn *LazyTxn) LockKeys(ctx context.Context, lockCtx *kv.LockCtx, keys ...kv.Key) error {
 	failpoint.Inject("beforeLockKeys", func() {})
 	t := time.Now()
+	ctx, observe := metrics.WithExecSpan(ctx, "LockKeys")
+	defer func() { observe(time.Since(t).Seconds()) }()
 
 	var originState txninfo.TxnRunningState
 	txn.mu.Lock()

@@ -959,7 +959,7 @@ func (do *Domain) GetEtcdClient() *clientv3.Client {
 // should be called only once in BootstrapSession.
 func (do *Domain) LoadPrivilegeLoop(ctx sessionctx.Context) error {
 	ctx.GetSessionVars().InRestrictedSQL = true
-	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.Background(), "set @@autocommit = 1")
+	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("Privilege"), "set @@autocommit = 1")
 	if err != nil {
 		return err
 	}

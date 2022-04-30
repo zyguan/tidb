@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/terror"
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/variable"
@@ -66,7 +67,7 @@ func LoadDoneDeleteRanges(ctx sessionctx.Context, safePoint uint64) (ranges []De
 }
 
 func loadDeleteRangesFromTable(ctx sessionctx.Context, table string, safePoint uint64) (ranges []DelRangeTask, _ error) {
-	rs, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), loadDeleteRangeSQL, table, safePoint)
+	rs, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("DDL"), loadDeleteRangeSQL, table, safePoint)
 	if rs != nil {
 		defer terror.Call(rs.Close)
 	}
@@ -77,7 +78,7 @@ func loadDeleteRangesFromTable(ctx sessionctx.Context, table string, safePoint u
 	req := rs.NewChunk(nil)
 	it := chunk.NewIterator4Chunk(req)
 	for {
-		err = rs.Next(context.TODO(), req)
+		err = rs.Next(metrics.InternalContext("DDL"), req)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -107,12 +108,12 @@ func loadDeleteRangesFromTable(ctx sessionctx.Context, table string, safePoint u
 
 // CompleteDeleteRange moves a record from gc_delete_range table to gc_delete_range_done table.
 func CompleteDeleteRange(ctx sessionctx.Context, dr DelRangeTask) error {
-	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), "BEGIN")
+	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("DDL"), "BEGIN")
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	_, err = ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), recordDoneDeletedRangeSQL, dr.JobID, dr.ElementID)
+	_, err = ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("DDL"), recordDoneDeletedRangeSQL, dr.JobID, dr.ElementID)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -121,13 +122,13 @@ func CompleteDeleteRange(ctx sessionctx.Context, dr DelRangeTask) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	_, err = ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), "COMMIT")
+	_, err = ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("DDL"), "COMMIT")
 	return errors.Trace(err)
 }
 
 // RemoveFromGCDeleteRange is exported for ddl pkg to use.
 func RemoveFromGCDeleteRange(ctx sessionctx.Context, jobID, elementID int64) error {
-	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), completeDeleteRangeSQL, jobID, elementID)
+	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("DDL"), completeDeleteRangeSQL, jobID, elementID)
 	return errors.Trace(err)
 }
 
@@ -151,7 +152,7 @@ func RemoveMultiFromGCDeleteRange(ctx context.Context, sctx sessionctx.Context, 
 
 // DeleteDoneRecord removes a record from gc_delete_range_done table.
 func DeleteDoneRecord(ctx sessionctx.Context, dr DelRangeTask) error {
-	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), deleteDoneRecordSQL, dr.JobID, dr.ElementID)
+	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("DDL"), deleteDoneRecordSQL, dr.JobID, dr.ElementID)
 	return errors.Trace(err)
 }
 
@@ -159,7 +160,7 @@ func DeleteDoneRecord(ctx sessionctx.Context, dr DelRangeTask) error {
 func UpdateDeleteRange(ctx sessionctx.Context, dr DelRangeTask, newStartKey, oldStartKey kv.Key) error {
 	newStartKeyHex := hex.EncodeToString(newStartKey)
 	oldStartKeyHex := hex.EncodeToString(oldStartKey)
-	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), updateDeleteRangeSQL, newStartKeyHex, dr.JobID, dr.ElementID, oldStartKeyHex)
+	_, err := ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("DDL"), updateDeleteRangeSQL, newStartKeyHex, dr.JobID, dr.ElementID, oldStartKeyHex)
 	return errors.Trace(err)
 }
 

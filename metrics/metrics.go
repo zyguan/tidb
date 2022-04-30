@@ -15,6 +15,9 @@
 package metrics
 
 import (
+	"context"
+	"strings"
+
 	"github.com/prometheus/client_golang/prometheus"
 	tikvmetrics "github.com/tikv/client-go/v2/metrics"
 )
@@ -28,6 +31,15 @@ var (
 			Name:      "panic_total",
 			Help:      "Counter of panic.",
 		}, []string{LblType})
+
+	// ExecutionPathDuration trace the duration of specific execution path
+	ExecutionPathDuration = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace: "tidb",
+			Subsystem: "server",
+			Name:      "execution_path_duration_seconds",
+			Help:      "Duration of each execution path.",
+		}, []string{LabelPath})
 )
 
 // metrics labels.
@@ -40,6 +52,7 @@ const (
 	LabelDDLSyncer = "ddl-syncer"
 	LabelGCWorker  = "gcworker"
 	LabelAnalyze   = "analyze"
+	LabelPath      = "path"
 
 	LabelBatchRecvLoop = "batch-recv-loop"
 	LabelBatchSendLoop = "batch-send-loop"
@@ -54,6 +67,40 @@ const (
 	Server       = "server"
 	TiKVClient   = "tikvclient"
 )
+
+type execPathKey struct{}
+
+var execPath = execPathKey{}
+
+// WithExecRoot attach root execution path to the context.
+func WithExecRoot(ctx context.Context, external bool, spans ...string) context.Context {
+	if ctx.Value(execPath) != nil {
+		return ctx
+	}
+	path := "External"
+	if !external {
+		path = "Internal"
+	}
+	if len(spans) > 0 {
+		path = path + "/" + strings.Join(spans, "/")
+	}
+	return context.WithValue(ctx, execPath, path)
+}
+
+// WithExecSpan append a span to the execution path.
+func WithExecSpan(ctx context.Context, name string) (context.Context, func(float64)) {
+	path, _ := ctx.Value(execPath).(string)
+	if len(name) == 0 {
+		return ctx, ExecutionPathDuration.With(prometheus.Labels{LabelPath: path}).Observe
+	}
+	path = path + "/" + name
+	return context.WithValue(ctx, execPath, path), ExecutionPathDuration.With(prometheus.Labels{LabelPath: path}).Observe
+}
+
+// InternalContext create a new internal background context
+func InternalContext(spans ...string) context.Context {
+	return WithExecRoot(context.Background(), false, spans...)
+}
 
 // RetLabel returns "ok" when err == nil and "err" when err != nil.
 // This could be useful when you need to observe the operation result.
@@ -165,6 +212,7 @@ func RegisterMetrics() {
 	prometheus.MustRegister(CPUProfileCounter)
 	prometheus.MustRegister(ReadFromTableCacheCounter)
 	prometheus.MustRegister(LoadTableCacheDurationHistogram)
+	prometheus.MustRegister(ExecutionPathDuration)
 
 	tikvmetrics.InitMetrics(TiDB, TiKVClient)
 	tikvmetrics.RegisterMetrics()

@@ -1738,7 +1738,7 @@ func (e *AnalyzeFastExec) calculateEstimateSampleStep() (err error) {
 			}
 		}
 		var rs sqlexec.RecordSet
-		rs, err = e.ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), sql.String())
+		rs, err = e.ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("Analyze"), sql.String())
 		if err != nil {
 			return
 		}
@@ -1748,7 +1748,7 @@ func (e *AnalyzeFastExec) calculateEstimateSampleStep() (err error) {
 		}
 		defer terror.Call(rs.Close)
 		chk := rs.NewChunk(nil)
-		err = rs.Next(context.TODO(), chk)
+		err = rs.Next(metrics.InternalContext("Analyze"), chk)
 		if err != nil {
 			return
 		}
@@ -1764,12 +1764,12 @@ func (e *AnalyzeFastExec) activateTxnForRowCount() (rollbackFn func() error, err
 	txn, err := e.ctx.Txn(true)
 	if err != nil {
 		if kv.ErrInvalidTxn.Equal(err) {
-			_, err := e.ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), "begin")
+			_, err := e.ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("Analyze"), "begin")
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
 			rollbackFn = func() error {
-				_, err := e.ctx.(sqlexec.SQLExecutor).ExecuteInternal(context.TODO(), "rollback")
+				_, err := e.ctx.(sqlexec.SQLExecutor).ExecuteInternal(metrics.InternalContext("Analyze"), "rollback")
 				return err
 			}
 		} else {

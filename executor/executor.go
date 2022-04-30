@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
@@ -40,6 +41,7 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/meta/autoid"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/auth"
 	"github.com/pingcap/tidb/parser/model"
@@ -285,8 +287,17 @@ type Executor interface {
 func Next(ctx context.Context, e Executor, req *chunk.Chunk) error {
 	base := e.base()
 	if base.runtimeStats != nil {
+		var observe func(float64)
 		start := time.Now()
-		defer func() { base.runtimeStats.Record(time.Since(start), req.NumRows()) }()
+		name := strings.TrimPrefix(reflect.TypeOf(e).String(), "*executor.")
+		ctx, observe = metrics.WithExecSpan(ctx, name)
+		defer func() {
+			dur := time.Since(start)
+			if dur > 100*time.Microsecond {
+				observe(dur.Seconds())
+			}
+			base.runtimeStats.Record(dur, req.NumRows())
+		}()
 	}
 	sessVars := base.ctx.GetSessionVars()
 	if atomic.LoadUint32(&sessVars.Killed) == 1 {

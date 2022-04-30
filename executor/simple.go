@@ -1379,7 +1379,7 @@ func userExistsInternal(sqlExecutor sqlexec.SQLExecutor, name string, host strin
 		return false, err
 	}
 	req := recordSet.NewChunk(nil)
-	err = recordSet.Next(context.TODO(), req)
+	err = recordSet.Next(metrics.InternalContext("User"), req)
 	var rows int = 0
 	if err == nil {
 		rows = req.NumRows()

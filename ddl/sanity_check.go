@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/model"
@@ -72,7 +73,7 @@ func (d *ddl) checkDeleteRangeCnt(job *model.Job) {
 		_ = rs.Close()
 	}()
 	req := rs.NewChunk(nil)
-	err = rs.Next(context.TODO(), req)
+	err = rs.Next(metrics.InternalContext("DDL"), req)
 	if err != nil {
 		panic("should not happened, err:" + err.Error())
 	}

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/auth"
 	"github.com/pingcap/tidb/parser/mysql"
@@ -575,7 +576,7 @@ func (p *MySQLPrivilege) loadTable(sctx sessionctx.Context, sql string,
 	fs := rs.Fields()
 	req := rs.NewChunk(nil)
 	for {
-		err = rs.Next(context.TODO(), req)
+		err = rs.Next(metrics.InternalContext("Privilege"), req)
 		if err != nil {
 			return errors.Trace(err)
 		}

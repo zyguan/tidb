@@ -21,6 +21,7 @@ import (
 	"github.com/cznic/mathutil"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/infoschema"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/model"
 	"github.com/pingcap/tidb/parser/mysql"
 	"github.com/pingcap/tidb/parser/terror"
@@ -69,7 +70,7 @@ func (h *Handle) initStatsMeta(is infoschema.InfoSchema) (statsCache, error) {
 	req := rc.NewChunk(nil)
 	iter := chunk.NewIterator4Chunk(req)
 	for {
-		err := rc.Next(context.TODO(), req)
+		err := rc.Next(metrics.InternalContext("Stats", "Init"), req)
 		if err != nil {
 			return statsCache{}, errors.Trace(err)
 		}
@@ -166,7 +167,7 @@ func (h *Handle) initStatsHistograms(is infoschema.InfoSchema, cache *statsCache
 	req := rc.NewChunk(nil)
 	iter := chunk.NewIterator4Chunk(req)
 	for {
-		err := rc.Next(context.TODO(), req)
+		err := rc.Next(metrics.InternalContext("Stats", "Init"), req)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -212,7 +213,7 @@ func (h *Handle) initStatsTopN(cache *statsCache) error {
 	req := rc.NewChunk(nil)
 	iter := chunk.NewIterator4Chunk(req)
 	for {
-		err := rc.Next(context.TODO(), req)
+		err := rc.Next(metrics.InternalContext("Stats", "Init"), req)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -260,7 +261,7 @@ func (h *Handle) initStatsFMSketch(cache *statsCache) error {
 	req := rc.NewChunk(nil)
 	iter := chunk.NewIterator4Chunk(req)
 	for {
-		err := rc.Next(context.TODO(), req)
+		err := rc.Next(metrics.InternalContext("Stats", "Init"), req)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -332,7 +333,7 @@ func (h *Handle) initTopNCountSum(tableID, colID int64) (int64, error) {
 	}
 	req := rs.NewChunk(nil)
 	iter := chunk.NewIterator4Chunk(req)
-	err = rs.Next(context.TODO(), req)
+	err = rs.Next(metrics.InternalContext("Stats", "Init"), req)
 	if err != nil {
 		return 0, err
 	}
@@ -352,7 +353,7 @@ func (h *Handle) initStatsBuckets(cache *statsCache) error {
 	req := rc.NewChunk(nil)
 	iter := chunk.NewIterator4Chunk(req)
 	for {
-		err := rc.Next(context.TODO(), req)
+		err := rc.Next(metrics.InternalContext("Stats", "Init"), req)
 		if err != nil {
 			return errors.Trace(err)
 		}

@@ -15,12 +15,12 @@
 package statistics
 
 import (
-	"context"
 	"sort"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/mysql"
 	"github.com/pingcap/tidb/parser/terror"
@@ -239,7 +239,7 @@ func (s SampleBuilder) CollectColumnStats() ([]*SampleCollector, *SortedBuilder,
 			collectors[i].CMSketch = NewCMSketch(s.CMSketchDepth, s.CMSketchWidth)
 		}
 	}
-	ctx := context.TODO()
+	ctx := metrics.InternalContext("Stats", "Sample")
 	req := s.RecordSet.NewChunk(nil)
 	it := chunk.NewIterator4Chunk(req)
 	for {

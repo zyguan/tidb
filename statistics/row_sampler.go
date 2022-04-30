@@ -16,10 +16,10 @@ package statistics
 
 import (
 	"container/heap"
-	"context"
 	"math/rand"
 
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
@@ -143,7 +143,7 @@ func (s *RowSampleBuilder) Collect() (RowSampleCollector, error) {
 	for i := 0; i < len(s.ColsFieldType)+len(s.ColGroups); i++ {
 		collector.Base().FMSketches = append(collector.Base().FMSketches, NewFMSketch(s.MaxFMSketchSize))
 	}
-	ctx := context.TODO()
+	ctx := metrics.InternalContext("Stats", "Sample")
 	chk := s.RecordSet.NewChunk(nil)
 	it := chunk.NewIterator4Chunk(chk)
 	for {

@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/infoschema"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser"
 	"github.com/pingcap/tidb/parser/auth"
 	"github.com/pingcap/tidb/parser/model"
@@ -736,7 +737,7 @@ func checkBootstrapped(s Session) (bool, error) {
 // getTiDBVar gets variable value from mysql.tidb table.
 // Those variables are used by TiDB server.
 func getTiDBVar(s Session, name string) (sVal string, isNull bool, e error) {
-	ctx := context.Background()
+	ctx := metrics.InternalContext("Bootstrap")
 	rs, err := s.ExecuteInternal(ctx, `SELECT HIGH_PRIORITY VARIABLE_VALUE FROM %n.%n WHERE VARIABLE_NAME= %?`,
 		mysql.SystemDB,
 		mysql.TiDBTable,
@@ -921,7 +922,7 @@ func upgradeToVer12(s Session, ver int64) {
 	if ver >= version12 {
 		return
 	}
-	ctx := context.Background()
+	ctx := metrics.InternalContext("Bootstrap")
 	_, err := s.ExecuteInternal(ctx, "BEGIN")
 	terror.MustNil(err)
 	sql := "SELECT HIGH_PRIORITY user, host, password FROM mysql.user WHERE password != ''"
@@ -1394,7 +1395,7 @@ func upgradeToVer55(s Session, ver int64) {
 	}
 
 	selectSQL := "select HIGH_PRIORITY * from mysql.global_variables where variable_name in ('" + strings.Join(names, quoteCommaQuote) + "')"
-	ctx := context.Background()
+	ctx := metrics.InternalContext("Bootstrap")
 	rs, err := s.ExecuteInternal(ctx, selectSQL)
 	terror.MustNil(err)
 	defer terror.Call(rs.Close)
@@ -1514,7 +1515,7 @@ func upgradeToVer67(s Session, ver int64) {
 	p := parser.New()
 	now := types.NewTime(types.FromGoTime(time.Now()), mysql.TypeTimestamp, 3)
 	for {
-		err = rs.Next(context.TODO(), req)
+		err = rs.Next(metrics.InternalContext("Bootstrap"), req)
 		if err != nil {
 			logutil.BgLogger().Fatal("upgradeToVer67 error", zap.Error(err))
 		}
@@ -1720,7 +1721,7 @@ func upgradeToVer80(s Session, ver int64) {
 	}
 	// Check if tidb_analyze_version exists in mysql.GLOBAL_VARIABLES.
 	// If not, insert "tidb_analyze_version | 1" since this is the old behavior before we introduce this variable.
-	ctx := context.Background()
+	ctx := metrics.InternalContext("Bootstrap")
 	rs, err := s.ExecuteInternal(ctx, "SELECT VARIABLE_VALUE FROM %n.%n WHERE VARIABLE_NAME=%?;",
 		mysql.SystemDB, mysql.GlobalVariablesTable, variable.TiDBAnalyzeVersion)
 	terror.MustNil(err)
@@ -1743,7 +1744,7 @@ func upgradeToVer81(s Session, ver int64) {
 	}
 	// Check if tidb_enable_index_merge exists in mysql.GLOBAL_VARIABLES.
 	// If not, insert "tidb_enable_index_merge | off".
-	ctx := context.Background()
+	ctx := metrics.InternalContext("Bootstrap")
 	rs, err := s.ExecuteInternal(ctx, "SELECT VARIABLE_VALUE FROM %n.%n WHERE VARIABLE_NAME=%?;",
 		mysql.SystemDB, mysql.GlobalVariablesTable, variable.TiDBEnableIndexMerge)
 	terror.MustNil(err)
