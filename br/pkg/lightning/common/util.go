@@ -94,8 +94,12 @@ func ConnectMySQL(dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	tryConnect := tryConnectMySQL
+	if strings.Contains(cfg.Addr, ",") {
+		tryConnect = tryConnectTiDB
+	}
 	// Try plain password first.
-	db, firstErr := tryConnectMySQL(dsn)
+	db, firstErr := tryConnect(dsn)
 	if firstErr == nil {
 		return db, nil
 	}
@@ -104,7 +108,7 @@ func ConnectMySQL(dsn string) (*sql.DB, error) {
 		// If password is encoded by base64, try the decoded string as well.
 		if password, decodeErr := base64.StdEncoding.DecodeString(cfg.Passwd); decodeErr == nil && string(password) != cfg.Passwd {
 			cfg.Passwd = string(password)
-			db, err = tryConnectMySQL(cfg.FormatDSN())
+			db, err = tryConnect(cfg.FormatDSN())
 			if err == nil {
 				return db, nil
 			}
