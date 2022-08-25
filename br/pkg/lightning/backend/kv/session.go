@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/docker/go-units"
@@ -264,7 +265,7 @@ func newSession(options *SessionOptions, logger log.Logger) *session {
 	vars.SQLMode = sqlMode
 	if options.SysVars != nil {
 		for k, v := range options.SysVars {
-			if err := vars.SetSystemVar(k, v); err != nil {
+			if err := vars.SetSystemVar(k, v); err != nil && !strings.Contains(err.Error(), "read only variable") {
 				logger.DPanic("new session: failed to set system var",
 					log.ShortError(err),
 					zap.String("key", k))
