@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/meta/autoid"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/auth"
 	"github.com/pingcap/tidb/parser/model"
@@ -298,12 +299,31 @@ type Executor interface {
 	Schema() *expression.Schema
 }
 
+var (
+	inspectPointGet    = metrics.InspectDuration.WithLabelValues("Executor.PointGet")
+	inspectIndexLookUp = metrics.InspectDuration.WithLabelValues("Executor.IndexLookUp")
+	inspectTableReader = metrics.InspectDuration.WithLabelValues("Executor.TableReader")
+)
+
 // Next is a wrapper function on e.Next(), it handles some common codes.
 func Next(ctx context.Context, e Executor, req *chunk.Chunk) error {
 	base := e.base()
 	if base.runtimeStats != nil {
 		start := time.Now()
-		defer func() { base.runtimeStats.Record(time.Since(start), req.NumRows()) }()
+		defer func() {
+			dur := time.Since(start)
+			base.runtimeStats.Record(dur, req.NumRows())
+			if base.ctx.GetSessionVars().ConnectionID > 0 {
+				switch e.(type) {
+				case *PointGetExecutor:
+					inspectPointGet.Observe(dur.Seconds())
+				case *IndexLookUpExecutor:
+					inspectIndexLookUp.Observe(dur.Seconds())
+				case *TableReaderExecutor:
+					inspectTableReader.Observe(dur.Seconds())
+				}
+			}
+		}()
 	}
 	sessVars := base.ctx.GetSessionVars()
 	if atomic.LoadUint32(&sessVars.Killed) == 1 {

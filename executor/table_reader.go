@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/tidb/distsql"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/model"
 	plannercore "github.com/pingcap/tidb/planner/core"
 	"github.com/pingcap/tidb/sessionctx"
@@ -36,6 +37,8 @@ import (
 	"github.com/pingcap/tidb/util/ranger"
 	"github.com/pingcap/tidb/util/stringutil"
 	"github.com/pingcap/tipb/go-tipb"
+	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"golang.org/x/exp/slices"
 )
 
@@ -129,8 +132,36 @@ func (e *TableReaderExecutor) setDummy() {
 	e.dummy = true
 }
 
+var (
+	inspectTableReaderRPCCop  = metrics.InspectDuration.WithLabelValues("TableReader.RPC.Cop")
+	inspectTableReaderTiKVCop = metrics.InspectDuration.WithLabelValues("TableReader.TiKV.Cop")
+)
+
+func (e *TableReaderExecutor) inspectRPC(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+	return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+		var (
+			start        time.Time
+			rpcObserver  = inspectTableReaderRPCCop
+			tikvObserver = inspectTableReaderTiKVCop
+		)
+		if e.ctx.GetSessionVars().ConnectionID > 0 && req != nil && req.Type == tikvrpc.CmdCop {
+			start = time.Now()
+		}
+		resp, err := next(target, req)
+		if !start.IsZero() {
+			rpcObserver.Observe(time.Since(start).Seconds())
+			if resp != nil {
+				tikvObserver.Observe(time.Duration(resp.GetExecDetailsV2().TimeDetail.TotalRpcWallTimeNs).Seconds())
+			}
+		}
+		return resp, err
+	}
+}
+
 // Open initializes necessary variables for using this executor.
 func (e *TableReaderExecutor) Open(ctx context.Context) error {
+	e.ctx.GetSessionVars().StmtCtx.KvExecCounter = nil
+	ctx = interceptor.WithRPCInterceptor(ctx, interceptor.RPCInterceptor(e.inspectRPC))
 	if span := opentracing.SpanFromContext(ctx); span != nil && span.Tracer() != nil {
 		span1 := span.Tracer().StartSpan("TableReaderExecutor.Open", opentracing.ChildOf(span.Context()))
 		defer span1.Finish()
@@ -277,6 +308,7 @@ func (e *TableReaderExecutor) Close() error {
 // buildResp first builds request and sends it to tikv using distsql.Select. It uses SelectResult returned by the callee
 // to fetch all results.
 func (e *TableReaderExecutor) buildResp(ctx context.Context, ranges []*ranger.Range) (distsql.SelectResult, error) {
+
 	if e.storeType == kv.TiFlash && e.kvRangeBuilder != nil {
 		if !e.batchCop {
 			// TiFlash cannot support to access multiple tables/partitions within one KVReq, so we have to build KVReq for each partition separately.

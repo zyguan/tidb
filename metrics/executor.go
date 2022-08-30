@@ -55,4 +55,12 @@ var (
 			Name:      "phase_duration_seconds",
 			Help:      "Summary of each execution phase duration.",
 		}, []string{LblPhase, LblInternal})
+
+	InspectDuration = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Namespace: "tidb",
+			Subsystem: "inspect",
+			Name:      "duration_seconds",
+			Help:      "...",
+		}, []string{LblType})
 )

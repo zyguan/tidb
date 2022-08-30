@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/tidb/distsql"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/charset"
 	"github.com/pingcap/tidb/parser/model"
 	"github.com/pingcap/tidb/parser/mysql"
@@ -52,6 +53,8 @@ import (
 	"github.com/pingcap/tidb/util/memory"
 	"github.com/pingcap/tidb/util/ranger"
 	"github.com/pingcap/tipb/go-tipb"
+	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
@@ -426,6 +429,32 @@ func (e *IndexLookUpExecutor) setDummy() {
 	e.dummy = true
 }
 
+var (
+	inspectIndexLookUpRPCCop  = metrics.InspectDuration.WithLabelValues("IndexLookUp.RPC.Cop")
+	inspectIndexLookUpTiKVCop = metrics.InspectDuration.WithLabelValues("IndexLookUp.TiKV.Cop")
+)
+
+func (e *IndexLookUpExecutor) inspectRPC(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+	return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+		var (
+			start        time.Time
+			rpcObserver  = inspectIndexLookUpRPCCop
+			tikvObserver = inspectIndexLookUpTiKVCop
+		)
+		if e.ctx.GetSessionVars().ConnectionID > 0 && req != nil && req.Type == tikvrpc.CmdCop {
+			start = time.Now()
+		}
+		resp, err := next(target, req)
+		if !start.IsZero() {
+			rpcObserver.Observe(time.Since(start).Seconds())
+			if resp != nil {
+				tikvObserver.Observe(time.Duration(resp.GetExecDetailsV2().TimeDetail.TotalRpcWallTimeNs).Seconds())
+			}
+		}
+		return resp, err
+	}
+}
+
 // Open implements the Executor Open interface.
 func (e *IndexLookUpExecutor) Open(ctx context.Context) error {
 	var err error
@@ -524,6 +553,8 @@ func (e *IndexLookUpExecutor) open(ctx context.Context) error {
 func (e *IndexLookUpExecutor) startWorkers(ctx context.Context, initBatchSize int) error {
 	// indexWorker will write to workCh and tableWorker will read from workCh,
 	// so fetching index and getting table data can run concurrently.
+	e.ctx.GetSessionVars().StmtCtx.KvExecCounter = nil
+	ctx = interceptor.WithRPCInterceptor(ctx, interceptor.RPCInterceptor(e.inspectRPC))
 	ctx, cancel := context.WithCancel(ctx)
 	e.cancelFunc = cancel
 	workCh := make(chan *lookupTableTask, 1)

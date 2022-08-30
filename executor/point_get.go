@@ -17,6 +17,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
@@ -24,6 +25,7 @@ import (
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/model"
 	"github.com/pingcap/tidb/parser/mysql"
 	plannercore "github.com/pingcap/tidb/planner/core"
@@ -38,6 +40,8 @@ import (
 	"github.com/pingcap/tidb/util/execdetails"
 	"github.com/pingcap/tidb/util/logutil/consistency"
 	"github.com/pingcap/tidb/util/rowcodec"
+	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/tikvrpc/interceptor"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 )
 
@@ -351,10 +355,24 @@ func (e *PointGetExecutor) Next(ctx context.Context, req *chunk.Chunk) error {
 	return nil
 }
 
+var (
+	inspectPointGetGet  = metrics.InspectDuration.WithLabelValues("Executor.PointGet.Get")
+	inspectPointGetLock = metrics.InspectDuration.WithLabelValues("Executor.PointGet.Lock")
+)
+
 func (e *PointGetExecutor) getAndLock(ctx context.Context, key kv.Key) (val []byte, err error) {
+	var start time.Time
+	if e.ctx.GetSessionVars().ConnectionID > 0 {
+		start = time.Now()
+	}
 	if e.ctx.GetSessionVars().IsPessimisticReadConsistency() {
 		// Only Lock the exist keys in RC isolation.
 		val, err = e.get(ctx, key)
+		if !start.IsZero() {
+			current := time.Now()
+			inspectPointGetGet.Observe(current.Sub(start).Seconds())
+			start = current
+		}
 		if err != nil {
 			if !kv.ErrNotExist.Equal(err) {
 				return nil, err
@@ -362,6 +380,9 @@ func (e *PointGetExecutor) getAndLock(ctx context.Context, key kv.Key) (val []by
 			return nil, nil
 		}
 		err = e.lockKeyIfNeeded(ctx, key)
+		if !start.IsZero() {
+			inspectPointGetLock.Observe(time.Since(start).Seconds())
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -369,10 +390,18 @@ func (e *PointGetExecutor) getAndLock(ctx context.Context, key kv.Key) (val []by
 	}
 	// Lock the key before get in RR isolation, then get will get the value from the cache.
 	err = e.lockKeyIfNeeded(ctx, key)
+	if !start.IsZero() {
+		current := time.Now()
+		inspectPointGetLock.Observe(current.Sub(start).Seconds())
+		start = current
+	}
 	if err != nil {
 		return nil, err
 	}
 	val, err = e.get(ctx, key)
+	if !start.IsZero() {
+		inspectPointGetGet.Observe(time.Since(start).Seconds())
+	}
 	if err != nil {
 		if !kv.ErrNotExist.Equal(err) {
 			return nil, err
@@ -393,6 +422,7 @@ func (e *PointGetExecutor) lockKeyIfNeeded(ctx context.Context, key []byte) erro
 			return err
 		}
 		lockCtx.InitReturnValues(1)
+		ctx = interceptor.WithRPCInterceptor(ctx, interceptor.RPCInterceptor(e.inspectRPC))
 		err = doLockKeys(ctx, e.ctx, lockCtx, key)
 		if err != nil {
 			return err
@@ -452,7 +482,40 @@ func (e *PointGetExecutor) get(ctx context.Context, key kv.Key) ([]byte, error) 
 		}
 	}
 	// if not read lock or table was unlock then snapshot get
+	e.snapshot.SetOption(kv.RPCInterceptor, interceptor.RPCInterceptor(e.inspectRPC))
 	return e.snapshot.Get(ctx, key)
+}
+
+var (
+	inspectPointGetRPCGet   = metrics.InspectDuration.WithLabelValues("PointGet.RPC.Get")
+	inspectPointGetRPCLock  = metrics.InspectDuration.WithLabelValues("PointGet.RPC.Lock")
+	inspectPointGetTiKVGet  = metrics.InspectDuration.WithLabelValues("PointGet.TiKV.Get")
+	inspectPointGetTiKVLock = metrics.InspectDuration.WithLabelValues("PointGet.TiKV.Lock")
+)
+
+func (e *PointGetExecutor) inspectRPC(next interceptor.RPCInterceptorFunc) interceptor.RPCInterceptorFunc {
+	return func(target string, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+		var (
+			start        time.Time
+			rpcObserver  = inspectPointGetRPCGet
+			tikvObserver = inspectPointGetTiKVGet
+		)
+		if e.ctx.GetSessionVars().ConnectionID > 0 && req != nil && (req.Type == tikvrpc.CmdGet || req.Type == tikvrpc.CmdPessimisticLock) {
+			start = time.Now()
+			if req.Type == tikvrpc.CmdPessimisticLock {
+				rpcObserver = inspectPointGetRPCLock
+				tikvObserver = inspectPointGetTiKVLock
+			}
+		}
+		resp, err := next(target, req)
+		if !start.IsZero() {
+			rpcObserver.Observe(time.Since(start).Seconds())
+			if resp != nil {
+				tikvObserver.Observe(time.Duration(resp.GetExecDetailsV2().TimeDetail.TotalRpcWallTimeNs).Seconds())
+			}
+		}
+		return resp, err
+	}
 }
 
 func (e *PointGetExecutor) verifyTxnScope() error {

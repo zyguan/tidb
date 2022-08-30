@@ -1123,6 +1123,8 @@ func (a *ExecStmt) observePhaseDurations(internal bool, commitDetails *util.Comm
 	}
 }
 
+var inspectFinishExecuteStmt = metrics.InspectDuration.WithLabelValues("Stmt.FinishExecuteStmt")
+
 // FinishExecuteStmt is used to record some information after `ExecStmt` execution finished:
 // 1. record slow log if needed.
 // 2. record summary statement.
@@ -1132,6 +1134,9 @@ func (a *ExecStmt) observePhaseDurations(internal bool, commitDetails *util.Comm
 func (a *ExecStmt) FinishExecuteStmt(txnTS uint64, err error, hasMoreResults bool) {
 	sessVars := a.Ctx.GetSessionVars()
 	execDetail := sessVars.StmtCtx.GetExecDetails()
+	if sessVars.ConnectionID > 0 {
+		defer func(start time.Time) { inspectFinishExecuteStmt.Observe(time.Since(start).Seconds()) }(time.Now())
+	}
 	// Attach commit/lockKeys runtime stats to executor runtime stats.
 	if (execDetail.CommitDetail != nil || execDetail.LockKeysDetail != nil) && sessVars.StmtCtx.RuntimeStatsColl != nil {
 		statsWithCommit := &execdetails.RuntimeStatsWithCommit{
