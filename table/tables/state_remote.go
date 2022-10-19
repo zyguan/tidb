@@ -16,7 +16,9 @@ package tables
 
 import (
 	"context"
+	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -81,8 +83,19 @@ type sqlExec interface {
 	ExecuteInternal(context.Context, string, ...interface{}) (sqlexec.RecordSet, error)
 }
 
+type cacheService interface {
+	LocalAddr() string
+	Invalidate(ctx context.Context, addr string, tid int64, minReadLease uint64) (uint64, error)
+}
+
+type cacheDataStatus struct {
+	maxReadTS uint64
+	readLease uint64
+}
+
 type stateRemoteHandle struct {
-	exec sqlExec
+	exec  sqlExec
+	cache cacheService
 
 	// local state, this could be staled.
 	// Since stateRemoteHandle is used in single thread, it's safe for all operations
@@ -93,9 +106,10 @@ type stateRemoteHandle struct {
 }
 
 // NewStateRemote creates a StateRemote object.
-func NewStateRemote(exec sqlExec) *stateRemoteHandle {
+func NewStateRemote(exec sqlExec, cache cacheService) *stateRemoteHandle {
 	return &stateRemoteHandle{
-		exec: exec,
+		exec:  exec,
+		cache: cache,
 	}
 }
 
@@ -152,7 +166,10 @@ func (h *stateRemoteHandle) LockForRead(ctx context.Context, tid int64, newLease
 
 // LockForWrite try to add a write lock to the table with the specified tableID, return the write lock lease.
 func (h *stateRemoteHandle) LockForWrite(ctx context.Context, tid int64, leaseDuration time.Duration) (uint64, error) {
-	var ret uint64
+	var (
+		ret    uint64
+		status = cacheDataStatus{maxReadTS: math.MaxUint64}
+	)
 
 	if h.lockType == CachedTableLockWrite {
 		safe := oracle.GoTimeToTS(time.Now().Add(leaseDuration / 2))
@@ -164,25 +181,27 @@ func (h *stateRemoteHandle) LockForWrite(ctx context.Context, tid int64, leaseDu
 	}
 
 	for {
-		waitAndRetry, lease, err := h.lockForWriteOnce(ctx, tid, leaseDuration)
+		wait, lease, err := h.lockForWriteOnce(ctx, tid, leaseDuration, status)
 		if err != nil {
 			return 0, err
 		}
-		if waitAndRetry == 0 {
+		if wait == nil {
 			ret = lease
 			break
 		}
-		time.Sleep(waitAndRetry)
+		status = <-wait
 	}
 	return ret, nil
 }
 
-func (h *stateRemoteHandle) lockForWriteOnce(ctx context.Context, tid int64, leaseDuration time.Duration) (waitAndRetry time.Duration, ts uint64, err error) {
+func (h *stateRemoteHandle) lockForWriteOnce(ctx context.Context, tid int64, leaseDuration time.Duration, status cacheDataStatus) (wait chan cacheDataStatus, ts uint64, err error) {
 	var (
 		_updateLocal  bool
 		_lockType     CachedTableLockType
 		_lease        uint64
 		_oldReadLease uint64
+
+		leaseWaitDuration time.Duration
 	)
 
 	err = h.runInTxn(ctx, true, func(ctx context.Context, now uint64) error {
@@ -225,7 +244,7 @@ func (h *stateRemoteHandle) lockForWriteOnce(ctx context.Context, tid int64, lea
 			}
 
 			// Wait for lease to expire, and then retry.
-			waitAndRetry = waitForLeaseExpire(lease, now)
+			leaseWaitDuration = waitForLeaseExpire(lease, now)
 			{
 				_updateLocal = true
 				_lockType = CachedTableLockIntend
@@ -233,8 +252,10 @@ func (h *stateRemoteHandle) lockForWriteOnce(ctx context.Context, tid int64, lea
 				_lease = ts
 			}
 		case CachedTableLockIntend:
-			// `now` exceed `oldReadLease` means wait for READ lock lease is done, it's safe to read here.
-			if now > oldReadLease {
+			// 1. `now` exceed `oldReadLease` means wait for READ lock lease is done, it's safe to write here.
+			// 2. `now` exceed `maxReadTS` within the same lease means all cache data has been invalidated and no more
+			//    read from cache after `maxReadTS`, it's also safe to write here.
+			if now > oldReadLease || (oldReadLease == status.readLease && now > status.maxReadTS) {
 				if err = h.updateRow(ctx, tid, "WRITE", ts); err != nil {
 					return errors.Trace(err)
 				}
@@ -247,7 +268,7 @@ func (h *stateRemoteHandle) lockForWriteOnce(ctx context.Context, tid int64, lea
 			}
 			// Otherwise, the WRITE should wait for the READ lease expire.
 			// And then retry changing the lock to WRITE
-			waitAndRetry = waitForLeaseExpire(oldReadLease, now)
+			leaseWaitDuration = waitForLeaseExpire(oldReadLease, now)
 		case CachedTableLockWrite:
 			if ts > lease { // Note the check, don't decrease lease value!
 				if err = h.updateRow(ctx, tid, "WRITE", ts); err != nil {
@@ -267,9 +288,79 @@ func (h *stateRemoteHandle) lockForWriteOnce(ctx context.Context, tid int64, lea
 		h.lockType = _lockType
 		h.lease = _lease
 		h.oldReadLease = _oldReadLease
+		if _lockType == CachedTableLockIntend {
+			// leaseWaitDuration >= 1ms when the lock is INTEND because it's equals to waitForLeaseExpire(lease, now)
+			// where lease >= now (otherwise we acquire WRITE lock directly since the lease is outdated). Thus MaxUint64
+			// must be written to the wait channel after leaseWaitDuration.
+			wait = make(chan cacheDataStatus, 2)
+			go h.invalidateCache(ctx, tid, _oldReadLease, leaseWaitDuration, wait)
+		}
+	}
+	if leaseWaitDuration > 0 {
+		if wait == nil {
+			wait = make(chan cacheDataStatus, 1)
+		}
+		go func() {
+			time.Sleep(leaseWaitDuration)
+			wait <- cacheDataStatus{maxReadTS: math.MaxUint64}
+		}()
 	}
 
 	return
+}
+
+func (h *stateRemoteHandle) invalidateCache(ctx context.Context, tid int64, oldReadLease uint64, leaseWaitDuration time.Duration, out chan cacheDataStatus) {
+	ctx, cancel := context.WithTimeout(ctx, leaseWaitDuration)
+	defer cancel()
+	addrs, err := h.listServers(ctx, tid)
+	if err != nil {
+		return // failed to list servers
+	}
+
+	// send invalidate cache requests to all servers
+	var (
+		wg        sync.WaitGroup
+		lock      sync.Mutex
+		maxReadTS uint64
+	)
+	for i, addr := range addrs {
+		wg.Add(1)
+		go func(i int, addr string) {
+			defer wg.Done()
+			ts, err := h.cache.Invalidate(ctx, addr, tid, oldReadLease)
+			lock.Lock()
+			if err != nil {
+				if maxReadTS != math.MaxUint64 {
+					maxReadTS = math.MaxUint64
+					cancel()
+				}
+			} else if ts > maxReadTS {
+				maxReadTS = ts
+			}
+			lock.Unlock()
+		}(i, addr)
+	}
+	wg.Wait()
+
+	if maxReadTS >= oldReadLease {
+		return // fallback to waiting read lease
+	}
+
+	// calculate wait duration for maxReadTS
+	var waitDuration time.Duration
+	err = h.runInTxn(ctx, false, func(ctx context.Context, now uint64) error {
+		waitDuration = waitForLeaseExpire(maxReadTS, now)
+		return nil
+	})
+	if err != nil {
+		return // failed to get wait duration
+	}
+
+	// emit cache data status after maxReadTS
+	if waitDuration > 0 {
+		time.Sleep(waitDuration)
+	}
+	out <- cacheDataStatus{maxReadTS: maxReadTS, readLease: oldReadLease}
 }
 
 func waitForLeaseExpire(oldReadLease, now uint64) time.Duration {
@@ -455,7 +546,28 @@ func (h *stateRemoteHandle) loadRow(ctx context.Context, tid int64, forUpdate bo
 
 func (h *stateRemoteHandle) updateRow(ctx context.Context, tid int64, lockType string, lease uint64) error {
 	_, err := h.execSQL(ctx, "update mysql.table_cache_meta set lock_type = %?, lease = %? where tid = %?", lockType, lease, tid)
+	if err != nil {
+		return err
+	}
+	if lockType == "READ" {
+		_, err = h.execSQL(ctx, "insert into mysql.table_cache_data (table_id, server, lease) values (%?, %?, %?) on duplicate key update lease = values(lease)", tid, h.cache.LocalAddr(), lease)
+	} else if lockType == "WRITE" {
+		_, err = h.execSQL(ctx, "delete from mysql.table_cache_data where table_id = %?", tid)
+	}
 	return err
+}
+
+func (h *stateRemoteHandle) listServers(ctx context.Context, tid int64) ([]string, error) {
+	ctx = kv.WithInternalSourceType(ctx, kv.InternalTxnMeta)
+	chunkRows, err := h.execSQL(ctx, "select server from mysql.table_cache_data where table_id = %?", tid)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	servers := make([]string, len(chunkRows))
+	for i, row := range chunkRows {
+		servers[i] = row.GetString(0)
+	}
+	return servers, nil
 }
 
 func (h *stateRemoteHandle) execSQL(ctx context.Context, sql string, args ...interface{}) ([]chunk.Row, error) {

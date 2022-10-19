@@ -419,7 +419,7 @@ func TestRenewLease(t *testing.T) {
 	tk.MustExec("select * from cache_renew_t")
 
 	tk1 := testkit.NewTestKit(t, store)
-	remote := tables.NewStateRemote(tk1.Session())
+	remote := tables.NewStateRemote(tk1.Session(), new(nullCacheService))
 	var leaseBefore uint64
 	for i = 0; i < 20; i++ {
 		time.Sleep(200 * time.Millisecond)

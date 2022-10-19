@@ -371,6 +371,13 @@ const (
 		oldReadLease bigint(20) NOT NULL DEFAULT 0,
 		PRIMARY KEY (tid)
 	);`
+	// CreateTableCacheDataTable stores the meta info of each table cache data.
+	CreateTableCacheDataTable = `CREATE TABLE IF NOT EXISTS mysql.table_cache_data (
+		table_id BIGINT(20)   NOT NULL,
+		server   VARCHAR(512) NOT NULL,
+		lease    BIGINT(20)   NOT NULL DEFAULT 0,
+		PRIMARY KEY (table_id, server) CLUSTERED
+	);`
 	// CreateAnalyzeOptionsTable stores the analyze options used by analyze and auto analyze.
 	CreateAnalyzeOptionsTable = `CREATE TABLE IF NOT EXISTS mysql.analyze_options (
 		table_id BIGINT(64) NOT NULL,
@@ -632,6 +639,8 @@ const (
 	// version93 converts oom-use-tmp-storage to a sysvar
 	version93 = 93
 	version94 = 94
+	// version95 adds the mysql.table_cache_data table
+	version95 = 95
 )
 
 // currentBootstrapVersion is defined as a variable, so we can modify its value for testing.
@@ -736,6 +745,7 @@ var (
 		upgradeToVer91,
 		upgradeToVer93,
 		upgradeToVer94,
+		upgradeToVer95,
 	}
 )
 
@@ -1931,6 +1941,13 @@ func upgradeToVer94(s Session, ver int64) {
 	mustExecute(s, CreateMDLView)
 }
 
+func upgradeToVer95(s Session, ver int64) {
+	if ver >= version95 {
+		return
+	}
+	doReentrantDDL(s, CreateTableCacheDataTable)
+}
+
 func writeOOMAction(s Session) {
 	comment := "oom-action is `log` by default in v3.0.x, `cancel` by default in v4.0.11+"
 	mustExecute(s, `INSERT HIGH_PRIORITY INTO %n.%n VALUES (%?, %?, %?) ON DUPLICATE KEY UPDATE VARIABLE_VALUE= %?`,
@@ -2027,6 +2044,8 @@ func doDDLWorks(s Session) {
 	mustExecute(s, CreateAdvisoryLocks)
 	// Create mdl view.
 	mustExecute(s, CreateMDLView)
+	// Create table_cache_data table.
+	mustExecute(s, CreateTableCacheDataTable)
 }
 
 // inTestSuite checks if we are bootstrapping in the context of tests.

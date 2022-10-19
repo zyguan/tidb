@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/session"
 	"github.com/pingcap/tidb/table/tables"
@@ -26,6 +27,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
+
+type nullCacheService struct{}
+
+func (mgr *nullCacheService) LocalAddr() string { return "local" }
+
+func (mgr *nullCacheService) Invalidate(ctx context.Context, addr string, tid int64, minReadLease uint64) (uint64, error) {
+	return 0, errors.New("unavailable")
+}
 
 // initRow add a new record into the cached table meta lock table.
 func initRow(ctx context.Context, exec session.Session, tid int) error {
@@ -40,7 +49,7 @@ func TestStateRemote(t *testing.T) {
 	se := tk.Session()
 
 	ctx := kv.WithInternalSourceType(context.Background(), kv.InternalTxnMeta)
-	h := tables.NewStateRemote(se)
+	h := tables.NewStateRemote(se, new(nullCacheService))
 
 	// Check the initial value.
 	require.NoError(t, initRow(ctx, se, 5))

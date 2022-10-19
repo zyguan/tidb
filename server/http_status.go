@@ -47,6 +47,7 @@ import (
 	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pingcap/tidb/util/memory"
 	"github.com/pingcap/tidb/util/printer"
+	"github.com/pingcap/tidb/util/tablecache"
 	"github.com/pingcap/tidb/util/versioninfo"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/soheilhy/cmux"
@@ -457,6 +458,7 @@ func (s *Server) startStatusServerAndRPCServer(serverMux *http.ServeMux) {
 	statusServer := &http.Server{Addr: s.statusAddr, Handler: CorsHandler{handler: serverMux, cfg: s.cfg}}
 	grpcServer := NewRPCServer(s.cfg, s.dom, s)
 	service.RegisterChannelzServiceToServer(grpcServer)
+	tablecache.SetLocalAddr(s.statusAddr)
 
 	s.statusServer = statusServer
 	s.grpcServer = grpcServer

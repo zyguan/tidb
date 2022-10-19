@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pingcap/tidb/util/sqlexec"
+	"github.com/pingcap/tidb/util/tablecache"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
@@ -41,7 +43,15 @@ var (
 
 type cachedTable struct {
 	TableCommon
-	cacheData atomic.Value
+	maxReadTS struct {
+		sync.Mutex
+		value uint64
+	}
+	cache struct {
+		sync.RWMutex
+		data         *cacheData
+		minReadLease uint64
+	}
 	totalSize int64
 	// StateRemote is not thread-safe, this tokenLimit is used to keep only one visitor.
 	tokenLimit
@@ -90,12 +100,65 @@ func newMemBuffer(store kv.Storage) (kv.MemBuffer, error) {
 	return buffTxn.GetMemBuffer(), nil
 }
 
+func (c *cachedTable) observeReadTS(ts uint64) {
+	c.maxReadTS.Lock()
+	if c.maxReadTS.value < ts {
+		c.maxReadTS.value = ts
+	}
+	c.maxReadTS.Unlock()
+}
+
+func (c *cachedTable) getCacheData() (data *cacheData) {
+	c.cache.RLock()
+	data = c.cache.data
+	c.cache.RUnlock()
+	return
+}
+
+func (c *cachedTable) setCacheData(data *cacheData) {
+	c.cache.Lock()
+	if data != nil && data.Lease > c.cache.minReadLease {
+		c.cache.data = data
+	}
+	c.cache.Unlock()
+}
+
+func (c *cachedTable) casCacheData(old *cacheData, new *cacheData) (swapped bool) {
+	if old == nil || new == nil {
+		return false
+	}
+	expOldStart, expOldLease := old.Start, old.Lease
+	c.cache.Lock()
+	if actOld := c.cache.data; new.Lease > c.cache.minReadLease && actOld != nil && actOld.Start == expOldStart && actOld.Lease == expOldLease {
+		c.cache.data = new
+		swapped = true
+	}
+	c.cache.Unlock()
+	return
+}
+
+func (c *cachedTable) invalidateCacheData(minReadLease uint64) {
+	c.cache.Lock()
+	c.cache.data = nil
+	if c.cache.minReadLease < minReadLease {
+		c.cache.minReadLease = minReadLease
+	}
+	c.cache.Unlock()
+}
+
+func (c *cachedTable) InvalidateCache(minReadLease uint64) (maxReadTS uint64) {
+	c.invalidateCacheData(minReadLease)
+	c.maxReadTS.Lock()
+	maxReadTS = c.maxReadTS.value
+	c.maxReadTS.Unlock()
+	return
+}
+
 func (c *cachedTable) TryReadFromCache(ts uint64, leaseDuration time.Duration) (kv.MemBuffer, bool /*loading*/) {
-	tmp := c.cacheData.Load()
-	if tmp == nil {
+	data := c.getCacheData()
+	if data == nil {
 		return nil, false
 	}
-	data := tmp.(*cacheData)
 	if ts >= data.Start && ts < data.Lease {
 		leaseTime := oracle.GetTimeFromTS(data.Lease)
 		nowTime := oracle.GetTimeFromTS(ts)
@@ -113,6 +176,9 @@ func (c *cachedTable) TryReadFromCache(ts uint64, leaseDuration time.Duration) (
 		}
 		// If data is not nil, but data.MemBuffer is nil, it means the data is being
 		// loading by a background goroutine.
+		if data.MemBuffer != nil {
+			c.observeReadTS(ts)
+		}
 		return data.MemBuffer, data.MemBuffer == nil
 	}
 	return nil, false
@@ -134,7 +200,7 @@ func (c *cachedTable) Init(exec sqlexec.SQLExecutor) error {
 	if !ok {
 		return errors.New("Need sqlExec rather than sqlexec.SQLExecutor")
 	}
-	handle := NewStateRemote(raw)
+	handle := NewStateRemote(raw, tablecache.NewClient())
 	c.PutStateRemoteHandle(handle)
 	return nil
 }
@@ -207,11 +273,12 @@ func (c *cachedTable) updateLockForRead(ctx context.Context, handle StateRemote,
 		return
 	}
 	if succ {
-		c.cacheData.Store(&cacheData{
+		dataOnLoading := &cacheData{
 			Start:     ts,
 			Lease:     lease,
 			MemBuffer: nil, // Async loading, this will be set later.
-		})
+		}
+		c.setCacheData(dataOnLoading)
 
 		// Make the load data process async, in case that loading data takes longer the
 		// lease duration, then the loaded data get staled and that process repeats forever.
@@ -224,13 +291,12 @@ func (c *cachedTable) updateLockForRead(ctx context.Context, handle StateRemote,
 				return
 			}
 
-			tmp := c.cacheData.Load().(*cacheData)
-			if tmp != nil && tmp.Start == ts {
-				c.cacheData.Store(&cacheData{
-					Start:     startTS,
-					Lease:     tmp.Lease,
-					MemBuffer: mb,
-				})
+			ok := c.casCacheData(dataOnLoading, &cacheData{
+				Start:     startTS,
+				Lease:     lease,
+				MemBuffer: mb,
+			})
+			if ok {
 				atomic.StoreInt64(&c.totalSize, totalSize)
 			}
 		}()
@@ -297,7 +363,7 @@ func (c *cachedTable) renewLease(handle StateRemote, ts uint64, data *cacheData,
 		return
 	}
 	if newLease > 0 {
-		c.cacheData.Store(&cacheData{
+		c.setCacheData(&cacheData{
 			Start:     data.Start,
 			Lease:     newLease,
 			MemBuffer: data.MemBuffer,

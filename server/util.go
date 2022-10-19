@@ -44,9 +44,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/config"
+	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/parser/charset"
 	"github.com/pingcap/tidb/parser/mysql"
+	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/hack"
@@ -542,4 +545,20 @@ func (h CorsHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Access-Control-Allow-Methods", "GET")
 	}
 	h.handler.ServeHTTP(w, req)
+}
+
+type tableIndex struct {
+	*domain.Domain
+}
+
+func (idx *tableIndex) Get(ts uint64, id int64) (table.Table, error) {
+	is, err := idx.GetSnapshotInfoSchema(ts)
+	if err != nil {
+		return nil, err
+	}
+	tbl, ok := is.TableByID(id)
+	if !ok {
+		return nil, errors.New("no such table")
+	}
+	return tbl, nil
 }

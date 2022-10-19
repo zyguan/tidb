@@ -262,6 +262,10 @@ type CachedTable interface {
 
 	Init(exec sqlexec.SQLExecutor) error
 
+	// InvalidateCache invalidates current cache and rejects all cache data with lease less or equal than ts, then
+	// returns the max ts may be used for reading from the old cache.
+	InvalidateCache(ts uint64) uint64
+
 	// TryReadFromCache checks if the cache table is readable.
 	TryReadFromCache(ts uint64, leaseDuration time.Duration) (kv.MemBuffer, bool)
 
