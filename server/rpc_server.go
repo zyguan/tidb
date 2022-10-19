@@ -69,6 +69,7 @@ func NewRPCServer(config *config.Config, dom *domain.Domain, sm util.SessionMana
 	tikvpb.RegisterTikvServer(s, rpcSrv)
 	topsql.RegisterPubSubServer(s)
 	tablecache.RegisterServer(s, &tableIndex{dom})
+	tablecache.SetLocalAddr(fmt.Sprintf("%s:%d", config.AdvertiseAddress, config.Status.StatusPort))
 	return s
 }
 
