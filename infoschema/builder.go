@@ -17,6 +17,7 @@ package infoschema
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/ngaut/pools"
@@ -763,6 +764,9 @@ func (b *Builder) applyDropTable(dbInfo *model.DBInfo, tableID int64, affected [
 	}
 	if tableNames, ok := b.is.schemaMap[dbInfo.Name.L]; ok {
 		tblInfo := sortedTbls[idx].Meta()
+		if tbl, ok := tableNames.tables[tblInfo.Name.L].(table.CachedTable); ok {
+			tbl.InvalidateCache(math.MaxUint64)
+		}
 		delete(tableNames.tables, tblInfo.Name.L)
 		affected = appendAffectedIDs(affected, tblInfo)
 	}
