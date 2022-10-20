@@ -53,6 +53,7 @@ type cachedTable struct {
 		minReadLease uint64
 	}
 	totalSize int64
+	sizeLimit int64
 	// StateRemote is not thread-safe, this tokenLimit is used to keep only one visitor.
 	tokenLimit
 }
@@ -185,12 +186,15 @@ func (c *cachedTable) TryReadFromCache(ts uint64, leaseDuration time.Duration) (
 }
 
 // newCachedTable creates a new CachedTable Instance
-func newCachedTable(tbl *TableCommon) (table.Table, error) {
-	ret := &cachedTable{
-		TableCommon: *tbl,
-		tokenLimit:  make(chan StateRemote, 1),
+func newCachedTable(tbl *TableCommon, sizeLimit int64) (table.Table, error) {
+	if sizeLimit == 0 {
+		sizeLimit = 64 * (1 << 20)
 	}
-	return ret, nil
+	return &cachedTable{
+		TableCommon: *tbl,
+		sizeLimit:   sizeLimit,
+		tokenLimit:  make(chan StateRemote, 1),
+	}, nil
 }
 
 // Init is an extra operation for cachedTable after TableFromMeta,
@@ -304,11 +308,9 @@ func (c *cachedTable) updateLockForRead(ctx context.Context, handle StateRemote,
 	// Current status is not suitable to cache.
 }
 
-const cachedTableSizeLimit = 64 * (1 << 20)
-
 // AddRecord implements the AddRecord method for the table.Table interface.
 func (c *cachedTable) AddRecord(sctx sessionctx.Context, r []types.Datum, opts ...table.AddRecordOption) (recordID kv.Handle, err error) {
-	if atomic.LoadInt64(&c.totalSize) > cachedTableSizeLimit {
+	if atomic.LoadInt64(&c.totalSize) > c.sizeLimit {
 		return nil, table.ErrOptOnCacheTable.GenWithStackByArgs("table too large")
 	}
 	txnCtxAddCachedTable(sctx, c.Meta().ID, c)
@@ -328,7 +330,7 @@ func txnCtxAddCachedTable(sctx sessionctx.Context, tid int64, handle *cachedTabl
 // UpdateRecord implements table.Table
 func (c *cachedTable) UpdateRecord(ctx context.Context, sctx sessionctx.Context, h kv.Handle, oldData, newData []types.Datum, touched []bool) error {
 	// Prevent furthur writing when the table is already too large.
-	if atomic.LoadInt64(&c.totalSize) > cachedTableSizeLimit {
+	if atomic.LoadInt64(&c.totalSize) > c.sizeLimit {
 		return table.ErrOptOnCacheTable.GenWithStackByArgs("table too large")
 	}
 	txnCtxAddCachedTable(sctx, c.Meta().ID, c)

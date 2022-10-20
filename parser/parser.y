@@ -560,6 +560,7 @@ import (
 	shared                "SHARED"
 	shutdown              "SHUTDOWN"
 	signed                "SIGNED"
+	sizeLimit             "SIZE_LIMIT"
 	simple                "SIMPLE"
 	skip                  "SKIP"
 	skipSchemaFiles       "SKIP_SCHEMA_FILES"
@@ -1184,6 +1185,7 @@ import (
 	ShowProfileTypesOpt                    "Show profile types option"
 	ShowProfileType                        "Show profile type"
 	ShowProfileTypes                       "Show profile types"
+	SizeLimitOpt                           "Optional size limit declaration"
 	SplitOption                            "Split Option"
 	SplitSyntaxOption                      "Split syntax Option"
 	StatementList                          "statement list"
@@ -2292,17 +2294,29 @@ AlterTableSpec:
 		}
 	}
 // 	Support caching or non-caching a table in memory for tidb, It can be found in the official Oracle document, see: https://docs.oracle.com/database/121/SQLRF/statements_3001.htm
-|	"CACHE"
+|	"CACHE" SizeLimitOpt
 	{
 		$$ = &ast.AlterTableSpec{
-			Tp: ast.AlterTableCache,
+			Tp:             ast.AlterTableCache,
+			CacheSizeLimit: $2.(uint64),
 		}
 	}
 |	"NOCACHE"
 	{
 		$$ = &ast.AlterTableSpec{
-			Tp: ast.AlterTableNoCache,
+			Tp:             ast.AlterTableNoCache,
+			CacheSizeLimit: 0,
 		}
+	}
+
+SizeLimitOpt:
+	/* empty */
+	{
+		$$ = uint64(0)
+	}
+|	"SIZE_LIMIT" EqOpt LengthNum "MB"
+	{
+		$$ = $3.(uint64) * 1048576
 	}
 
 ReorganizePartitionRuleOpt:
@@ -6309,6 +6323,7 @@ UnReservedKeyword:
 |	"CONCURRENCY"
 |	"MB"
 |	"ONLINE"
+|	"SIZE_LIMIT"
 |	"RATE_LIMIT"
 |	"RESTORE"
 |	"RESTORES"

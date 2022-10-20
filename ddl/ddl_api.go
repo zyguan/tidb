@@ -85,6 +85,9 @@ const (
 	// Once tiflashCheckPendingTablesLimit is reached, we trigger a limiter detection.
 	tiflashCheckPendingTablesLimit = 100
 	tiflashCheckPendingTablesRetry = 7
+	// table cache size limit
+	tableCacheSizeLimitDef = uint64(64) * (1 << 20) // 64M
+	tableCacheSizeLimitMax = uint64(1 << 30)        // 1G
 )
 
 func (d *ddl) CreateSchema(ctx sessionctx.Context, stmt *ast.CreateDatabaseStmt) (err error) {
@@ -3339,7 +3342,7 @@ func (d *ddl) AlterTable(ctx context.Context, sctx sessionctx.Context, stmt *ast
 		case ast.AlterTablePartitionOptions:
 			err = d.AlterTablePartitionOptions(sctx, ident, spec)
 		case ast.AlterTableCache:
-			err = d.AlterTableCache(sctx, ident)
+			err = d.AlterTableCache(sctx, ident, spec.CacheSizeLimit)
 		case ast.AlterTableNoCache:
 			err = d.AlterTableNoCache(sctx, ident)
 		case ast.AlterTableDisableKeys, ast.AlterTableEnableKeys:
@@ -7259,14 +7262,16 @@ func (d *ddl) AlterPlacementPolicy(ctx sessionctx.Context, stmt *ast.AlterPlacem
 	return errors.Trace(err)
 }
 
-func (d *ddl) AlterTableCache(sctx sessionctx.Context, ti ast.Ident) (err error) {
+func (d *ddl) AlterTableCache(sctx sessionctx.Context, ti ast.Ident, sizeLimit uint64) (err error) {
 	schema, t, err := d.getSchemaAndTableByIdent(sctx, ti)
 	if err != nil {
 		return err
 	}
 	// if a table is already in cache state, return directly
-	if t.Meta().TableCacheStatusType == model.TableCacheStatusEnable {
+	if statusUnchanged := t.Meta().TableCacheStatusType == model.TableCacheStatusEnable; statusUnchanged && sizeLimit == 0 {
 		return nil
+	} else if statusUnchanged {
+		return dbterror.ErrOptOnCacheTable.GenWithStackByArgs("alter table cache size limit")
 	}
 
 	// forbidden cache table in system database.
@@ -7280,7 +7285,13 @@ func (d *ddl) AlterTableCache(sctx sessionctx.Context, ti ast.Ident) (err error)
 		return dbterror.ErrOptOnCacheTable.GenWithStackByArgs("partition mode")
 	}
 
-	succ, err := checkCacheTableSize(d.store, t.Meta().ID)
+	if sizeLimit == 0 {
+		sizeLimit = tableCacheSizeLimitDef
+	}
+	if sizeLimit > tableCacheSizeLimitMax {
+		return dbterror.ErrOptOnCacheTable.GenWithStackByArgs("table cache size limit too large")
+	}
+	succ, err := checkCacheTableSize(d.store, t.Meta().ID, sizeLimit)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -7308,15 +7319,14 @@ func (d *ddl) AlterTableCache(sctx sessionctx.Context, ti ast.Ident) (err error)
 		TableID:    t.Meta().ID,
 		Type:       model.ActionAlterCacheTable,
 		BinlogInfo: &model.HistoryInfo{},
-		Args:       []interface{}{},
+		Args:       []interface{}{sizeLimit},
 	}
 
 	err = d.DoDDLJob(sctx, job)
 	return d.callHookOnChanged(job, err)
 }
 
-func checkCacheTableSize(store kv.Storage, tableID int64) (bool, error) {
-	const cacheTableSizeLimit = 64 * (1 << 20) // 64M
+func checkCacheTableSize(store kv.Storage, tableID int64, sizeLimit uint64) (bool, error) {
 	succ := true
 	ctx := kv.WithInternalSourceType(context.Background(), kv.InternalTxnCacheTable)
 	err := kv.RunInNewTxn(ctx, store, true, func(ctx context.Context, txn kv.Transaction) error {
@@ -7335,7 +7345,7 @@ func checkCacheTableSize(store kv.Storage, tableID int64) (bool, error) {
 			totalSize += len(key)
 			totalSize += len(value)
 
-			if totalSize > cacheTableSizeLimit {
+			if uint64(totalSize) > sizeLimit {
 				succ = false
 				break
 			}

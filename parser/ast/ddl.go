@@ -2669,6 +2669,7 @@ type AlterTableSpec struct {
 	Statistics       *StatisticsSpec
 	AttributesSpec   *AttributesSpec
 	StatsOptionsSpec *StatsOptionsSpec
+	CacheSizeLimit   uint64
 }
 
 type TiFlashReplicaSpec struct {

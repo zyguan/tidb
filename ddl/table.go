@@ -1759,6 +1759,12 @@ func onAlterCacheTable(d *ddlCtx, t *meta.Meta, job *model.Job) (ver int64, err 
 		return ver, errors.Trace(dbterror.ErrOptOnCacheTable.GenWithStackByArgs("partition mode"))
 	}
 
+	sizeLimit := tableCacheSizeLimitDef
+	if err = job.DecodeArgs(&sizeLimit); err != nil {
+		job.State = model.JobStateCancelled
+		return 0, errors.Trace(err)
+	}
+
 	switch tbInfo.TableCacheStatusType {
 	case model.TableCacheStatusDisable:
 		// disable -> switching
@@ -1770,6 +1776,7 @@ func onAlterCacheTable(d *ddlCtx, t *meta.Meta, job *model.Job) (ver int64, err 
 	case model.TableCacheStatusSwitching:
 		// switching -> enable
 		tbInfo.TableCacheStatusType = model.TableCacheStatusEnable
+		tbInfo.TableCacheSizeLimit = sizeLimit
 		ver, err = updateVersionAndTableInfoWithCheck(d, t, job, tbInfo, true)
 		if err != nil {
 			return ver, err
@@ -1805,6 +1812,7 @@ func onAlterNoCacheTable(d *ddlCtx, t *meta.Meta, job *model.Job) (ver int64, er
 	case model.TableCacheStatusSwitching:
 		// switching -> disable
 		tbInfo.TableCacheStatusType = model.TableCacheStatusDisable
+		tbInfo.TableCacheSizeLimit = 0
 		ver, err = updateVersionAndTableInfoWithCheck(d, t, job, tbInfo, true)
 		if err != nil {
 			return ver, err
