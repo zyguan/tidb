@@ -284,9 +284,26 @@ var (
 			Namespace: "tidb",
 			Subsystem: "server",
 			Name:      "load_table_cache_seconds",
-			Help:      "Duration (us) for loading table cache.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 30), // 1us ~ 528s
+			Help:      "Duration for loading table cache.",
+			Buckets:   prometheus.ExponentialBuckets(1e-6, 2, 30), // 1us ~ 528s
 		})
+
+	TableCacheWriteWaitDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "tidb",
+			Subsystem: "server",
+			Name:      "table_cache_write_wait_duration_seconds",
+			Help:      "Bucketed histogram of table cache write wait time.",
+			Buckets:   prometheus.ExponentialBuckets(1e-2, 2, 10), // 10ms ~ 5.12s
+		}, []string{LblType})
+
+	TableCacheReadCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "tidb",
+			Subsystem: "server",
+			Name:      "table_cache_read_total",
+			Help:      "Counter of reads from table cache.",
+		}, []string{LblType})
 
 	RCCheckTSWriteConfilictCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

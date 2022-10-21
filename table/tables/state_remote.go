@@ -23,10 +23,16 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/kv"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/terror"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/sqlexec"
 	"github.com/tikv/client-go/v2/oracle"
+)
+
+var (
+	cacheWriteWaitInvalidate = metrics.TableCacheWriteWaitDurationHistogram.WithLabelValues("invalidate")
+	cacheWriteWaitLease      = metrics.TableCacheWriteWaitDurationHistogram.WithLabelValues("lease")
 )
 
 // CachedTableLockType define the lock type for cached table
@@ -91,6 +97,8 @@ type cacheService interface {
 type cacheDataStatus struct {
 	maxReadTS uint64
 	readLease uint64
+
+	waitTime time.Duration
 }
 
 type stateRemoteHandle struct {
@@ -190,6 +198,11 @@ func (h *stateRemoteHandle) LockForWrite(ctx context.Context, tid int64, leaseDu
 			break
 		}
 		status = <-wait
+		if status.maxReadTS == math.MaxUint64 {
+			cacheWriteWaitLease.Observe(status.waitTime.Seconds())
+		} else {
+			cacheWriteWaitInvalidate.Observe(status.waitTime.Seconds())
+		}
 	}
 	return ret, nil
 }
@@ -302,7 +315,7 @@ func (h *stateRemoteHandle) lockForWriteOnce(ctx context.Context, tid int64, lea
 		}
 		go func() {
 			time.Sleep(leaseWaitDuration)
-			wait <- cacheDataStatus{maxReadTS: math.MaxUint64}
+			wait <- cacheDataStatus{maxReadTS: math.MaxUint64, waitTime: leaseWaitDuration}
 		}()
 	}
 
@@ -312,6 +325,7 @@ func (h *stateRemoteHandle) lockForWriteOnce(ctx context.Context, tid int64, lea
 func (h *stateRemoteHandle) invalidateCache(ctx context.Context, tid int64, oldReadLease uint64, leaseWaitDuration time.Duration, out chan cacheDataStatus) {
 	ctx, cancel := context.WithTimeout(ctx, leaseWaitDuration)
 	defer cancel()
+	startTime := time.Now()
 	addrs, err := h.listServers(ctx, tid)
 	if err != nil {
 		return // failed to list servers
@@ -360,7 +374,7 @@ func (h *stateRemoteHandle) invalidateCache(ctx context.Context, tid int64, oldR
 	if waitDuration > 0 {
 		time.Sleep(waitDuration)
 	}
-	out <- cacheDataStatus{maxReadTS: maxReadTS, readLease: oldReadLease}
+	out <- cacheDataStatus{maxReadTS: maxReadTS, readLease: oldReadLease, waitTime: time.Since(startTime)}
 }
 
 func waitForLeaseExpire(oldReadLease, now uint64) time.Duration {

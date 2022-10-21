@@ -190,6 +190,8 @@ func RegisterMetrics() {
 	prometheus.MustRegister(CPUProfileCounter)
 	prometheus.MustRegister(ReadFromTableCacheCounter)
 	prometheus.MustRegister(LoadTableCacheDurationHistogram)
+	prometheus.MustRegister(TableCacheWriteWaitDurationHistogram)
+	prometheus.MustRegister(TableCacheReadCounter)
 	prometheus.MustRegister(NonTransactionalDeleteCount)
 	prometheus.MustRegister(MemoryUsage)
 	prometheus.MustRegister(StatsCacheLRUCounter)

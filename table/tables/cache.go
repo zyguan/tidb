@@ -39,6 +39,11 @@ import (
 
 var (
 	_ table.CachedTable = &cachedTable{}
+
+	cacheReadHitCounter         = metrics.TableCacheReadCounter.WithLabelValues("hit")
+	cacheReadMissNoneCounter    = metrics.TableCacheReadCounter.WithLabelValues("miss:none")
+	cacheReadMissLoadingCounter = metrics.TableCacheReadCounter.WithLabelValues("miss:loading")
+	cacheReadMissExpiredCounter = metrics.TableCacheReadCounter.WithLabelValues("miss:expired")
 )
 
 type cachedTable struct {
@@ -158,6 +163,7 @@ func (c *cachedTable) InvalidateCache(minReadLease uint64) (maxReadTS uint64) {
 func (c *cachedTable) TryReadFromCache(ts uint64, leaseDuration time.Duration) (kv.MemBuffer, bool /*loading*/) {
 	data := c.getCacheData()
 	if data == nil {
+		cacheReadMissNoneCounter.Inc()
 		return nil, false
 	}
 	if ts >= data.Start && ts < data.Lease {
@@ -179,9 +185,13 @@ func (c *cachedTable) TryReadFromCache(ts uint64, leaseDuration time.Duration) (
 		// loading by a background goroutine.
 		if data.MemBuffer != nil {
 			c.observeReadTS(ts)
+			cacheReadHitCounter.Inc()
+		} else {
+			cacheReadMissLoadingCounter.Inc()
 		}
 		return data.MemBuffer, data.MemBuffer == nil
 	}
+	cacheReadMissExpiredCounter.Inc()
 	return nil, false
 }
 
