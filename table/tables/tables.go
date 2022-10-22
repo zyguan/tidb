@@ -86,7 +86,7 @@ func MockTableFromMeta(tblInfo *model.TableInfo) table.Table {
 	var t TableCommon
 	initTableCommon(&t, tblInfo, tblInfo.ID, columns, nil)
 	if tblInfo.TableCacheStatusType != model.TableCacheStatusDisable {
-		ret, err := newCachedTable(&t, int64(tblInfo.TableCacheSizeLimit))
+		ret, err := newCachedTable(&t, cacheOptionsFromMeta(tblInfo))
 		if err != nil {
 			return nil
 		}
@@ -154,11 +154,18 @@ func TableFromMeta(allocs autoid.Allocators, tblInfo *model.TableInfo) (table.Ta
 			return nil, err
 		}
 		if tblInfo.TableCacheStatusType != model.TableCacheStatusDisable {
-			return newCachedTable(&t, int64(tblInfo.TableCacheSizeLimit))
+			return newCachedTable(&t, cacheOptionsFromMeta(tblInfo))
 		}
 		return &t, nil
 	}
 	return newPartitionedTable(&t, tblInfo)
+}
+
+func cacheOptionsFromMeta(tblInfo *model.TableInfo) cacheOptions {
+	return cacheOptions{
+		sizeLimit: int64(tblInfo.TableCacheSizeLimit),
+		indexOnly: tblInfo.TableCacheIndexOnly,
+	}
 }
 
 // initTableCommon initializes a TableCommon struct.

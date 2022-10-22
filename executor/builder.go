@@ -1266,25 +1266,17 @@ func (b *executorBuilder) buildUnionScanFromReader(reader Executor, v *plannerco
 	return us
 }
 
-type bypassDataSourceExecutor interface {
-	dataSourceExecutor
-	setDummy()
-}
-
-func (us *UnionScanExec) handleCachedTable(b *executorBuilder, x bypassDataSourceExecutor, vars *variable.SessionVars, startTS uint64) {
+func (us *UnionScanExec) handleCachedTable(b *executorBuilder, x dataSourceExecutor, vars *variable.SessionVars, startTS uint64) {
 	tbl := x.Table()
 	if tbl.Meta().TableCacheStatusType == model.TableCacheStatusEnable {
 		cachedTable := tbl.(table.CachedTable)
 		// Determine whether the cache can be used.
 		leaseDuration := time.Duration(variable.TableCacheLease.Load()) * time.Second
 		cacheData, loading := cachedTable.TryReadFromCache(startTS, leaseDuration)
-		if cacheData != nil {
+		if cacheData != nil && !loading {
 			vars.StmtCtx.ReadFromTableCache = true
-			x.setDummy()
-			us.cacheTable = cacheData
-		} else if loading {
-			// continue
-		} else {
+			us.cachedData = cacheData
+		} else if cacheData == nil {
 			if !b.inUpdateStmt && !b.inDeleteStmt && !b.inInsertStmt && !vars.StmtCtx.InExplainStmt {
 				store := b.ctx.GetStore()
 				cachedTable.UpdateLockForRead(context.Background(), store, startTS, leaseDuration)
@@ -5168,7 +5160,7 @@ func (b *executorBuilder) validCanReadTemporaryTable(tbl *model.TableInfo) error
 	return nil
 }
 
-func (b *executorBuilder) getCacheTable(tblInfo *model.TableInfo, startTS uint64) kv.MemBuffer {
+func (b *executorBuilder) getCacheTable(tblInfo *model.TableInfo, startTS uint64) *table.CachedData {
 	tbl, ok := b.is.TableByID(tblInfo.ID)
 	if !ok {
 		b.err = errors.Trace(infoschema.ErrTableNotExists.GenWithStackByArgs(b.ctx.GetSessionVars().CurrentDB, tblInfo.Name))
@@ -5177,12 +5169,10 @@ func (b *executorBuilder) getCacheTable(tblInfo *model.TableInfo, startTS uint64
 	sessVars := b.ctx.GetSessionVars()
 	leaseDuration := time.Duration(variable.TableCacheLease.Load()) * time.Second
 	cacheData, loading := tbl.(table.CachedTable).TryReadFromCache(startTS, leaseDuration)
-	if cacheData != nil {
+	if cacheData != nil && !loading {
 		sessVars.StmtCtx.ReadFromTableCache = true
 		return cacheData
-	} else if loading {
-		// continue
-	} else {
+	} else if cacheData == nil {
 		if !b.ctx.GetSessionVars().StmtCtx.InExplainStmt && !b.inDeleteStmt && !b.inUpdateStmt {
 			tbl.(table.CachedTable).UpdateLockForRead(context.Background(), b.ctx.GetStore(), startTS, leaseDuration)
 		}

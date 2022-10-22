@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/tidb/sessionctx"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	driver "github.com/pingcap/tidb/store/driver/txn"
+	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/table/tables"
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
@@ -118,17 +119,53 @@ func (e *BatchPointGetExec) Open(context.Context) error {
 // cacheTableSnapshot inherits kv.Snapshot and override the BatchGet methods and Get methods.
 type cacheTableSnapshot struct {
 	kv.Snapshot
-	memBuffer kv.MemBuffer
+	cache *table.CachedData
 }
 
 func (s cacheTableSnapshot) BatchGet(ctx context.Context, keys []kv.Key) (map[string][]byte, error) {
-	values := make(map[string][]byte)
-	if s.memBuffer == nil {
-		return values, nil
+	if s.cache == nil || s.cache.MemBuffer == nil {
+		return s.Snapshot.BatchGet(ctx, keys)
+	}
+
+	var (
+		values map[string][]byte
+		err    error
+	)
+
+	if s.cache.IndexOnly {
+		var (
+			indexKeys []kv.Key
+			otherKeys []kv.Key
+		)
+		for _, key := range keys {
+			if tablecodec.IsIndexKey(key) {
+				if indexKeys == nil {
+					indexKeys = make([]kv.Key, 0, len(keys))
+				}
+				indexKeys = append(indexKeys, key)
+			} else {
+				if otherKeys == nil {
+					otherKeys = make([]kv.Key, 0, len(keys))
+				}
+				otherKeys = append(otherKeys, key)
+			}
+		}
+		if len(indexKeys) > 0 {
+			keys = indexKeys
+		}
+		if len(otherKeys) > 0 {
+			values, err = s.Snapshot.BatchGet(ctx, otherKeys)
+			if err != nil {
+				return values, err
+			}
+		}
+	}
+	if values == nil {
+		values = make(map[string][]byte)
 	}
 
 	for _, key := range keys {
-		val, err := s.memBuffer.Get(ctx, key)
+		val, err := s.cache.Get(ctx, key)
 		if kv.ErrNotExist.Equal(err) {
 			continue
 		}
@@ -148,12 +185,19 @@ func (s cacheTableSnapshot) BatchGet(ctx context.Context, keys []kv.Key) (map[st
 }
 
 func (s cacheTableSnapshot) Get(ctx context.Context, key kv.Key) ([]byte, error) {
-	return s.memBuffer.Get(ctx, key)
+	if s.cache == nil || s.cache.MemBuffer == nil {
+		return s.Snapshot.Get(ctx, key)
+	}
+	if s.cache.IndexOnly && !tablecodec.IsIndexKey(key) {
+		val, err := s.Snapshot.Get(ctx, key)
+		return val, err
+	}
+	return s.cache.Get(ctx, key)
 }
 
 // MockNewCacheTableSnapShot only serves for test.
-func MockNewCacheTableSnapShot(snapshot kv.Snapshot, memBuffer kv.MemBuffer) *cacheTableSnapshot {
-	return &cacheTableSnapshot{snapshot, memBuffer}
+func MockNewCacheTableSnapShot(snapshot kv.Snapshot, cache *table.CachedData) *cacheTableSnapshot {
+	return &cacheTableSnapshot{snapshot, cache}
 }
 
 // Close implements the Executor interface.

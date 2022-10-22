@@ -537,6 +537,7 @@ type TableInfo struct {
 	TempTableType        `json:"temp_table_type"`
 	TableCacheStatusType `json:"cache_table_status"`
 	TableCacheSizeLimit  uint64         `json:"cache_table_size_limit"`
+	TableCacheIndexOnly  bool           `json:"cache_table_index_only"`
 	PlacementPolicyRef   *PolicyRefInfo `json:"policy_ref_info"`
 
 	// StatsOptions is used when do analyze/auto-analyze for each table

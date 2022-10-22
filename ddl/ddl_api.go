@@ -3342,7 +3342,7 @@ func (d *ddl) AlterTable(ctx context.Context, sctx sessionctx.Context, stmt *ast
 		case ast.AlterTablePartitionOptions:
 			err = d.AlterTablePartitionOptions(sctx, ident, spec)
 		case ast.AlterTableCache:
-			err = d.AlterTableCache(sctx, ident, spec.CacheSizeLimit)
+			err = d.AlterTableCache(sctx, ident, spec)
 		case ast.AlterTableNoCache:
 			err = d.AlterTableNoCache(sctx, ident)
 		case ast.AlterTableDisableKeys, ast.AlterTableEnableKeys:
@@ -7262,16 +7262,21 @@ func (d *ddl) AlterPlacementPolicy(ctx sessionctx.Context, stmt *ast.AlterPlacem
 	return errors.Trace(err)
 }
 
-func (d *ddl) AlterTableCache(sctx sessionctx.Context, ti ast.Ident, sizeLimit uint64) (err error) {
+func (d *ddl) AlterTableCache(sctx sessionctx.Context, ti ast.Ident, spec *ast.AlterTableSpec) (err error) {
+	sizeLimit, indexOnly := spec.CacheSizeLimit, spec.CacheIndexOnly
 	schema, t, err := d.getSchemaAndTableByIdent(sctx, ti)
 	if err != nil {
 		return err
 	}
 	// if a table is already in cache state, return directly
-	if statusUnchanged := t.Meta().TableCacheStatusType == model.TableCacheStatusEnable; statusUnchanged && sizeLimit == 0 {
+	if tbl := t.Meta(); tbl.TableCacheStatusType == model.TableCacheStatusEnable {
+		if sizeLimit != 0 && sizeLimit != tbl.TableCacheSizeLimit {
+			return dbterror.ErrOptOnCacheTable.GenWithStackByArgs("alter table cache size limit")
+		}
+		if indexOnly != tbl.TableCacheIndexOnly {
+			return dbterror.ErrOptOnCacheTable.GenWithStackByArgs("alter table cache data range")
+		}
 		return nil
-	} else if statusUnchanged {
-		return dbterror.ErrOptOnCacheTable.GenWithStackByArgs("alter table cache size limit")
 	}
 
 	// forbidden cache table in system database.
@@ -7291,7 +7296,7 @@ func (d *ddl) AlterTableCache(sctx sessionctx.Context, ti ast.Ident, sizeLimit u
 	if sizeLimit > tableCacheSizeLimitMax {
 		return dbterror.ErrOptOnCacheTable.GenWithStackByArgs("table cache size limit too large")
 	}
-	succ, err := checkCacheTableSize(d.store, t.Meta().ID, sizeLimit)
+	succ, err := checkCacheTableSize(d.store, t.Meta().ID, sizeLimit, indexOnly)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -7319,19 +7324,24 @@ func (d *ddl) AlterTableCache(sctx sessionctx.Context, ti ast.Ident, sizeLimit u
 		TableID:    t.Meta().ID,
 		Type:       model.ActionAlterCacheTable,
 		BinlogInfo: &model.HistoryInfo{},
-		Args:       []interface{}{sizeLimit},
+		Args:       []interface{}{sizeLimit, indexOnly},
 	}
 
 	err = d.DoDDLJob(sctx, job)
 	return d.callHookOnChanged(job, err)
 }
 
-func checkCacheTableSize(store kv.Storage, tableID int64, sizeLimit uint64) (bool, error) {
+func checkCacheTableSize(store kv.Storage, tableID int64, sizeLimit uint64, indexOnly bool) (bool, error) {
 	succ := true
 	ctx := kv.WithInternalSourceType(context.Background(), kv.InternalTxnCacheTable)
 	err := kv.RunInNewTxn(ctx, store, true, func(ctx context.Context, txn kv.Transaction) error {
 		txn.SetOption(kv.RequestSourceType, kv.InternalTxnCacheTable)
-		prefix := tablecodec.GenTablePrefix(tableID)
+		var prefix kv.Key
+		if indexOnly {
+			prefix = tablecodec.GenTableIndexPrefix(tableID)
+		} else {
+			prefix = tablecodec.GenTablePrefix(tableID)
+		}
 		it, err := txn.Iter(prefix, prefix.PrefixNext())
 		if err != nil {
 			return errors.Trace(err)

@@ -48,6 +48,7 @@ var (
 
 type cachedTable struct {
 	TableCommon
+	cacheOptions
 	maxReadTS struct {
 		sync.Mutex
 		value uint64
@@ -58,9 +59,13 @@ type cachedTable struct {
 		minReadLease uint64
 	}
 	totalSize int64
-	sizeLimit int64
 	// StateRemote is not thread-safe, this tokenLimit is used to keep only one visitor.
 	tokenLimit
+}
+
+type cacheOptions struct {
+	sizeLimit int64
+	indexOnly bool
 }
 
 type tokenLimit chan StateRemote
@@ -160,7 +165,7 @@ func (c *cachedTable) InvalidateCache(minReadLease uint64) (maxReadTS uint64) {
 	return
 }
 
-func (c *cachedTable) TryReadFromCache(ts uint64, leaseDuration time.Duration) (kv.MemBuffer, bool /*loading*/) {
+func (c *cachedTable) TryReadFromCache(ts uint64, leaseDuration time.Duration) (*table.CachedData, bool /* loading */) {
 	data := c.getCacheData()
 	if data == nil {
 		cacheReadMissNoneCounter.Inc()
@@ -189,21 +194,21 @@ func (c *cachedTable) TryReadFromCache(ts uint64, leaseDuration time.Duration) (
 		} else {
 			cacheReadMissLoadingCounter.Inc()
 		}
-		return data.MemBuffer, data.MemBuffer == nil
+		return &table.CachedData{MemBuffer: data.MemBuffer, IndexOnly: c.indexOnly}, data.MemBuffer == nil
 	}
 	cacheReadMissExpiredCounter.Inc()
 	return nil, false
 }
 
 // newCachedTable creates a new CachedTable Instance
-func newCachedTable(tbl *TableCommon, sizeLimit int64) (table.Table, error) {
-	if sizeLimit == 0 {
-		sizeLimit = 64 * (1 << 20)
+func newCachedTable(tbl *TableCommon, opts cacheOptions) (table.Table, error) {
+	if opts.sizeLimit == 0 {
+		opts.sizeLimit = 64 * (1 << 20)
 	}
 	return &cachedTable{
-		TableCommon: *tbl,
-		sizeLimit:   sizeLimit,
-		tokenLimit:  make(chan StateRemote, 1),
+		TableCommon:  *tbl,
+		cacheOptions: opts,
+		tokenLimit:   make(chan StateRemote, 1),
 	}, nil
 }
 
@@ -228,9 +233,11 @@ func (c *cachedTable) loadDataFromOriginalTable(store kv.Storage) (kv.MemBuffer,
 	totalSize := int64(0)
 	ctx := kv.WithInternalSourceType(context.Background(), kv.InternalTxnCacheTable)
 	err = kv.RunInNewTxn(ctx, store, true, func(ctx context.Context, txn kv.Transaction) error {
-		prefix := tablecodec.GenTablePrefix(c.tableID)
-		if err != nil {
-			return errors.Trace(err)
+		var prefix kv.Key
+		if c.indexOnly {
+			prefix = tablecodec.GenTableIndexPrefix(c.tableID)
+		} else {
+			prefix = tablecodec.GenTablePrefix(c.tableID)
 		}
 		startTS = txn.StartTS()
 		it, err := txn.Iter(prefix, prefix.PrefixNext())

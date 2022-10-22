@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/tidb/executor"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/sessionctx/variable"
+	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/testkit"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
@@ -335,7 +336,7 @@ func TestCacheSnapShot(t *testing.T) {
 	require.NoError(t, err)
 	err = memBuffer.Set(keys[1], []byte("2222"))
 	require.NoError(t, err)
-	cacheTableSnapShot := executor.MockNewCacheTableSnapShot(nil, memBuffer)
+	cacheTableSnapShot := executor.MockNewCacheTableSnapShot(nil, &table.CachedData{MemBuffer: memBuffer, IndexOnly: false})
 	get, err := cacheTableSnapShot.Get(ctx, keys[0])
 	require.NoError(t, err)
 	require.Equal(t, get, []byte("1111"))

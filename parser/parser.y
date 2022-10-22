@@ -976,6 +976,7 @@ import (
 	AutoRandomOpt                          "Auto random option"
 	Boolean                                "Boolean (0, 1, false, true)"
 	OptionalBraces                         "optional braces"
+	CacheIndexOnlyOpt                      "cache index only opt"
 	CastType                               "Cast function target type"
 	ClearPasswordExpireOptions             "Clear password expire options"
 	ColumnDef                              "table column definition"
@@ -2294,11 +2295,12 @@ AlterTableSpec:
 		}
 	}
 // 	Support caching or non-caching a table in memory for tidb, It can be found in the official Oracle document, see: https://docs.oracle.com/database/121/SQLRF/statements_3001.htm
-|	"CACHE" SizeLimitOpt
+|	"CACHE" CacheIndexOnlyOpt SizeLimitOpt
 	{
 		$$ = &ast.AlterTableSpec{
 			Tp:             ast.AlterTableCache,
-			CacheSizeLimit: $2.(uint64),
+			CacheIndexOnly: $2.(bool),
+			CacheSizeLimit: $3.(uint64),
 		}
 	}
 |	"NOCACHE"
@@ -2317,6 +2319,16 @@ SizeLimitOpt:
 |	"SIZE_LIMIT" EqOpt LengthNum "MB"
 	{
 		$$ = $3.(uint64) * 1048576
+	}
+
+CacheIndexOnlyOpt:
+	/* empty */
+	{
+		$$ = false
+	}
+|	"INDEX" "ONLY"
+	{
+		$$ = true
 	}
 
 ReorganizePartitionRuleOpt:

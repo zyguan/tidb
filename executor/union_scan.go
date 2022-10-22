@@ -54,13 +54,14 @@ type UnionScanExec struct {
 	snapshotRows        [][]types.Datum
 	cursor4SnapshotRows int
 	snapshotChunkBuffer *chunk.Chunk
+	snapshotExecutor    Executor
 	mutableRow          chunk.MutRow
 	// virtualColumnIndex records all the indices of virtual columns and sort them in definition
 	// to make sure we can compute the virtual column in right order.
 	virtualColumnIndex []int
 
-	// cacheTable not nil means it's reading from cached table.
-	cacheTable kv.MemBuffer
+	// `cachedData` is not nil if there is data read from table cache.
+	cachedData *table.CachedData
 	collators  []collate.Collator
 
 	// If partitioned table and the physical table id is encoded in the chuck at this column index
@@ -76,20 +77,74 @@ func (us *UnionScanExec) Open(ctx context.Context) error {
 		defer span1.Finish()
 		ctx = opentracing.ContextWithSpan(ctx, span1)
 	}
-	if err := us.baseExecutor.Open(ctx); err != nil {
-		return err
-	}
 	return us.open(ctx)
 }
 
 func (us *UnionScanExec) open(ctx context.Context) error {
-	var err error
+	var (
+		err error
+		mem memReader
+	)
 	reader := us.children[0]
 
 	// If the push-downed condition contains virtual column, we may build a selection upon reader. Since unionScanExec
 	// has already contained condition, we can ignore the selection.
 	if sel, ok := reader.(*SelectionExec); ok {
 		reader = sel.children[0]
+	}
+
+	us.snapshotExecutor = us.children[0]
+	switch x := reader.(type) {
+	case *TableReaderExecutor:
+		if us.cachedData != nil && !us.cachedData.IndexOnly {
+			x.setDummy()
+			us.snapshotExecutor = nil
+		}
+		err = us.base().Open(ctx)
+		if err == nil {
+			mem = buildMemTableReader(ctx, us, x)
+		}
+	case *IndexReaderExecutor:
+		if us.cachedData != nil {
+			x.setDummy()
+			us.snapshotExecutor = nil
+		}
+		err = us.base().Open(ctx)
+		if err == nil {
+			mem = buildMemIndexReader(ctx, us, x)
+		}
+	case *IndexLookUpExecutor:
+		if us.cachedData != nil {
+			x.setDummy()
+		}
+		err = us.base().Open(ctx)
+		if err == nil {
+			r := buildMemIndexLookUpReader(ctx, us, x)
+			mem = r
+			if us.cachedData != nil && !us.cachedData.IndexOnly {
+				us.snapshotExecutor = nil
+			} else if us.cachedData != nil {
+				handles, err := r.idxReader.getMemRowsHandle()
+				if err != nil {
+					return err
+				}
+				reader, err := x.buildTableReader(ctx, us.table, handles)
+				if err != nil {
+					return err
+				}
+				us.snapshotExecutor = reader
+			}
+		}
+	case *IndexMergeReaderExecutor:
+		err = us.base().Open(ctx)
+		if err == nil {
+			mem = buildMemIndexMergeReader(ctx, us, x)
+		}
+	default:
+		err = fmt.Errorf("unexpected union scan children:%T", reader)
+	}
+	if err != nil {
+		return err
 	}
 
 	defer trace.StartRegion(ctx, "UnionScanBuildRows").End()
@@ -114,18 +169,7 @@ func (us *UnionScanExec) open(ctx context.Context) error {
 
 	// 1. select without virtual columns
 	// 2. build virtual columns and select with virtual columns
-	switch x := reader.(type) {
-	case *TableReaderExecutor:
-		us.addedRows, err = buildMemTableReader(ctx, us, x).getMemRows(ctx)
-	case *IndexReaderExecutor:
-		us.addedRows, err = buildMemIndexReader(ctx, us, x).getMemRows(ctx)
-	case *IndexLookUpExecutor:
-		us.addedRows, err = buildMemIndexLookUpReader(ctx, us, x).getMemRows(ctx)
-	case *IndexMergeReaderExecutor:
-		us.addedRows, err = buildMemIndexMergeReader(ctx, us, x).getMemRows(ctx)
-	default:
-		err = fmt.Errorf("unexpected union scan children:%T", reader)
-	}
+	us.addedRows, err = mem.getMemRows(ctx)
 	if err != nil {
 		return err
 	}
@@ -189,6 +233,12 @@ func (us *UnionScanExec) Close() error {
 	us.cursor4SnapshotRows = 0
 	us.addedRows = us.addedRows[:0]
 	us.snapshotRows = us.snapshotRows[:0]
+	if e := us.snapshotExecutor; e != nil {
+		us.snapshotExecutor = nil
+		if e != us.children[0] {
+			e.Close()
+		}
+	}
 	return us.children[0].Close()
 }
 
@@ -231,8 +281,7 @@ func (us *UnionScanExec) getOneRow(ctx context.Context) ([]types.Datum, error) {
 }
 
 func (us *UnionScanExec) getSnapshotRow(ctx context.Context) ([]types.Datum, error) {
-	if us.cacheTable != nil {
-		// From cache table, so the snapshot is nil
+	if us.snapshotExecutor == nil {
 		return nil, nil
 	}
 	if us.cursor4SnapshotRows < len(us.snapshotRows) {
@@ -242,7 +291,7 @@ func (us *UnionScanExec) getSnapshotRow(ctx context.Context) ([]types.Datum, err
 	us.cursor4SnapshotRows = 0
 	us.snapshotRows = us.snapshotRows[:0]
 	for len(us.snapshotRows) == 0 {
-		err = Next(ctx, us.children[0], us.snapshotChunkBuffer)
+		err = Next(ctx, us.snapshotExecutor, us.snapshotChunkBuffer)
 		if err != nil || us.snapshotChunkBuffer.NumRows() == 0 {
 			return nil, err
 		}
@@ -265,7 +314,7 @@ func (us *UnionScanExec) getSnapshotRow(ctx context.Context) ([]types.Datum, err
 				// commit, but for simplicity, we don't handle it here.
 				continue
 			}
-			us.snapshotRows = append(us.snapshotRows, row.GetDatumRow(retTypes(us.children[0])))
+			us.snapshotRows = append(us.snapshotRows, row.GetDatumRow(retTypes(us.snapshotExecutor)))
 		}
 	}
 	return us.snapshotRows[0], nil
@@ -314,4 +363,11 @@ func (us *UnionScanExec) compare(a, b []types.Datum) (int, error) {
 		}
 	}
 	return us.belowHandleCols.Compare(a, b, us.collators)
+}
+
+func (us *UnionScanExec) cache() kv.MemBuffer {
+	if us.cachedData == nil {
+		return nil
+	}
+	return us.cachedData.MemBuffer
 }

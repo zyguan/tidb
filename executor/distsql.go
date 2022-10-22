@@ -688,11 +688,15 @@ func (e *IndexLookUpExecutor) startTableWorker(ctx context.Context, workCh <-cha
 	}
 }
 
-func (e *IndexLookUpExecutor) buildTableReader(ctx context.Context, task *lookupTableTask) (Executor, error) {
+func (e *IndexLookUpExecutor) buildTableReaderFromTask(ctx context.Context, task *lookupTableTask) (Executor, error) {
 	table := e.table
 	if e.partitionTableMode && task.partitionTable != nil {
 		table = task.partitionTable
 	}
+	return e.buildTableReader(ctx, table, task.handles)
+}
+
+func (e *IndexLookUpExecutor) buildTableReader(ctx context.Context, table table.Table, handles []kv.Handle) (Executor, error) {
 	tableReaderExec := &TableReaderExecutor{
 		baseExecutor:     newBaseExecutor(e.ctx, e.schema, e.getTableRootPlanID()),
 		table:            table,
@@ -705,10 +709,10 @@ func (e *IndexLookUpExecutor) buildTableReader(ctx context.Context, task *lookup
 		feedback:         statistics.NewQueryFeedback(0, nil, 0, false),
 		corColInFilter:   e.corColInTblSide,
 		plans:            e.tblPlans,
-		netDataSize:      e.avgRowSize * float64(len(task.handles)),
+		netDataSize:      e.avgRowSize * float64(len(handles)),
 	}
 	tableReaderExec.buildVirtualColumnInfo()
-	tableReader, err := e.dataReaderBuilder.buildTableReaderFromHandles(ctx, tableReaderExec, task.handles, true)
+	tableReader, err := e.dataReaderBuilder.buildTableReaderFromHandles(ctx, tableReaderExec, handles, true)
 	if err != nil {
 		logutil.Logger(ctx).Error("build table reader from handles failed", zap.Error(err))
 		return nil, err
@@ -1299,7 +1303,7 @@ func getDatumRow(r *chunk.Row, fields []*types.FieldType) []types.Datum {
 // executeTask executes the table look up tasks. We will construct a table reader and send request by handles.
 // Then we hold the returning rows and finish this task.
 func (w *tableWorker) executeTask(ctx context.Context, task *lookupTableTask) error {
-	tableReader, err := w.idxLookup.buildTableReader(ctx, task)
+	tableReader, err := w.idxLookup.buildTableReaderFromTask(ctx, task)
 	if err != nil {
 		logutil.Logger(ctx).Error("build table reader failed", zap.Error(err))
 		return err
