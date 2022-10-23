@@ -71,6 +71,7 @@ import (
 	"github.com/pingcap/tidb/util/sys/linux"
 	storageSys "github.com/pingcap/tidb/util/sys/storage"
 	"github.com/pingcap/tidb/util/systimemon"
+	"github.com/pingcap/tidb/util/tablecache"
 	"github.com/pingcap/tidb/util/topsql"
 	"github.com/pingcap/tidb/util/versioninfo"
 	"github.com/prometheus/client_golang/prometheus"
@@ -206,6 +207,7 @@ func main() {
 	setupBinlogClient()
 	setupMetrics()
 	setupGCTuner()
+	setupTableCache()
 	storage, dom := createStoreAndDomain()
 	svr := createServer(storage, dom)
 
@@ -790,6 +792,12 @@ func setupGCTuner() {
 	}
 	threshold := limit * 7 / 10
 	gctuner.Tuning(threshold)
+}
+
+func setupTableCache() {
+	cfg := config.GetGlobalConfig()
+	// local address should be set up before loading infoschema
+	tablecache.SetLocalAddr(fmt.Sprintf("%s:%d", cfg.AdvertiseAddress, cfg.Status.StatusPort))
 }
 
 func closeDomainAndStorage(storage kv.Storage, dom *domain.Domain) {

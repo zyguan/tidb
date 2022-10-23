@@ -138,9 +138,9 @@ func (c *cachedTable) casCacheData(old *cacheData, new *cacheData) (swapped bool
 	if old == nil || new == nil {
 		return false
 	}
-	expOldStart, expOldLease := old.Start, old.Lease
+	expOldStart := old.Start
 	c.cache.Lock()
-	if actOld := c.cache.data; new.Lease > c.cache.minReadLease && actOld != nil && actOld.Start == expOldStart && actOld.Lease == expOldLease {
+	if actOld := c.cache.data; new.Lease > c.cache.minReadLease && actOld != nil && actOld.Start == expOldStart {
 		c.cache.data = new
 		swapped = true
 	}

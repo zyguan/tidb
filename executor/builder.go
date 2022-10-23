@@ -1276,7 +1276,7 @@ func (us *UnionScanExec) handleCachedTable(b *executorBuilder, x dataSourceExecu
 		if cacheData != nil && !loading {
 			vars.StmtCtx.ReadFromTableCache = true
 			us.cachedData = cacheData
-		} else if cacheData == nil {
+		} else if !loading {
 			if !b.inUpdateStmt && !b.inDeleteStmt && !b.inInsertStmt && !vars.StmtCtx.InExplainStmt {
 				store := b.ctx.GetStore()
 				cachedTable.UpdateLockForRead(context.Background(), store, startTS, leaseDuration)
@@ -5172,7 +5172,7 @@ func (b *executorBuilder) getCacheTable(tblInfo *model.TableInfo, startTS uint64
 	if cacheData != nil && !loading {
 		sessVars.StmtCtx.ReadFromTableCache = true
 		return cacheData
-	} else if cacheData == nil {
+	} else if !loading {
 		if !b.ctx.GetSessionVars().StmtCtx.InExplainStmt && !b.inDeleteStmt && !b.inUpdateStmt {
 			tbl.(table.CachedTable).UpdateLockForRead(context.Background(), b.ctx.GetStore(), startTS, leaseDuration)
 		}
