@@ -24,16 +24,21 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/tidb/config"
 	"github.com/pingcap/tidb/expression"
+	"github.com/pingcap/tidb/metrics"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/model"
 	"github.com/pingcap/tidb/parser/mysql"
 	"github.com/pingcap/tidb/sessionctx"
+	"github.com/pingcap/tidb/sessiontxn"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/hack"
 	"github.com/pingcap/tidb/util/logutil"
+	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
 
@@ -100,6 +105,9 @@ func (e *LoadDataExec) Open(ctx context.Context) error {
 type CommitTask struct {
 	cnt  uint64
 	rows [][]types.Datum
+
+	retryCount     uint
+	retryStartTime time.Time
 }
 
 // LoadDataInfo saves the information of loading data operation.
@@ -287,7 +295,7 @@ func (e *LoadDataInfo) ForceQuit() {
 
 // MakeCommitTask produce commit task with data in LoadDataInfo.rows LoadDataInfo.curBatchCnt
 func (e *LoadDataInfo) MakeCommitTask() CommitTask {
-	return CommitTask{e.curBatchCnt, e.rows}
+	return CommitTask{cnt: e.curBatchCnt, rows: e.rows}
 }
 
 // EnqOneTask feed one batch commit task to commit work
@@ -311,32 +319,146 @@ func (e *LoadDataInfo) EnqOneTask(ctx context.Context) error {
 	return err
 }
 
+// handlePessimisticLoadData is ported from ExecStmt.handlePessimisticDML
+func (e *LoadDataInfo) handlePessimisticLoadData(ctx context.Context, task *CommitTask) (err error) {
+	sctx := e.Ctx
+	txnCtx := sctx.GetSessionVars().TxnCtx
+	txn, err := sctx.Txn(false)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil && !sctx.GetSessionVars().ConstraintCheckInPlacePessimistic && sctx.GetSessionVars().InTxn() {
+			// If it's not a retryable error, rollback current transaction instead of rolling back current statement like
+			// in normal transactions, because we cannot locate and rollback the statement that leads to the lock error.
+			// This is too strict, but since the feature is not for everyone, it's the easiest way to guarantee safety.
+			logutil.Logger(ctx).Info("Transaction abort for the safety of lazy uniqueness check. "+
+				"Note this may not be a uniqueness violation.",
+				zap.Error(err),
+				zap.Uint64("conn", sctx.GetSessionVars().ConnectionID),
+				zap.Uint64("txnStartTS", txnCtx.StartTS),
+				zap.Uint64("forUpdateTS", txnCtx.GetForUpdateTS()),
+			)
+			sctx.GetSessionVars().SetInTxn(false)
+			err = ErrLazyUniquenessCheckFailure.GenWithStackByArgs(err.Error())
+		}
+	}()
+	for {
+		err = e.CheckAndInsertOneBatch(ctx, task.rows, task.cnt)
+		if !txn.Valid() {
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		keys, err1 := txn.(pessimisticTxn).KeysNeedToLock()
+		if err1 != nil {
+			return err1
+		}
+		keys = txnCtx.CollectUnchangedRowKeys(keys)
+		if len(keys) == 0 {
+			return nil
+		}
+		keys = filterTemporaryTableKeys(sctx.GetSessionVars(), keys)
+		seVars := sctx.GetSessionVars()
+		keys = filterLockTableKeys(seVars.StmtCtx, keys)
+		lockCtx, err := newLockCtx(sctx, seVars.LockWaitTimeout, len(keys))
+		if err != nil {
+			return err
+		}
+		var lockKeyStats *util.LockKeysDetails
+		ctx = context.WithValue(ctx, util.LockKeysDetailCtxKey, &lockKeyStats)
+		startLocking := time.Now()
+		err = txn.LockKeys(ctx, lockCtx, keys...)
+		if lockKeyStats != nil {
+			seVars.StmtCtx.MergeLockKeysExecDetails(lockKeyStats)
+		}
+		if err == nil {
+			return nil
+		}
+		err = e.handlePessimisticLockError(ctx, task, err)
+		if err != nil {
+			if ErrDeadlock.Equal(err) {
+				metrics.StatementDeadlockDetectDuration.Observe(time.Since(startLocking).Seconds())
+			}
+			return err
+		}
+	}
+}
+
+// handlePessimisticLockError is ported from ExecStmt.handlePessimisticLockError.
+func (e *LoadDataInfo) handlePessimisticLockError(ctx context.Context, task *CommitTask, lockErr error) (err error) {
+	if lockErr == nil {
+		return nil
+	}
+	defer func() {
+		if _, ok := errors.Cause(err).(*tikverr.ErrDeadlock); ok {
+			err = ErrDeadlock
+		}
+	}()
+	txnManager := sessiontxn.GetTxnManager(e.Ctx)
+	action, err := txnManager.OnStmtErrorForNextAction(sessiontxn.StmtErrAfterPessimisticLock, lockErr)
+	if err != nil {
+		return err
+	}
+
+	if action != sessiontxn.StmtActionRetryReady {
+		return lockErr
+	}
+
+	if task.retryCount >= config.GetGlobalConfig().PessimisticTxn.MaxRetryCount {
+		return errors.New("pessimistic lock retry limit reached")
+	}
+	task.retryCount++
+	task.retryStartTime = time.Now()
+
+	err = txnManager.OnStmtRetry(ctx)
+	if err != nil {
+		return err
+	}
+
+	e.Ctx.StmtRollback()
+	e.Ctx.GetSessionVars().StmtCtx.ResetForRetry()
+	e.Ctx.GetSessionVars().RetryInfo.ResetOffset()
+
+	return nil
+}
+
 // CommitOneTask insert Data from LoadDataInfo.rows, then make commit and refresh txn
-func (e *LoadDataInfo) CommitOneTask(ctx context.Context, task CommitTask) error {
+func (e *LoadDataInfo) CommitOneTask(ctx context.Context, task CommitTask) (bool, error) {
 	var err error
 	defer func() {
 		if err != nil {
 			e.Ctx.StmtRollback()
 		}
 	}()
-	err = e.CheckAndInsertOneBatch(ctx, task.rows, task.cnt)
+	vars := e.ctx.GetSessionVars()
+	inTxn := vars.InTxn()
+	if inTxn && vars.TxnCtx.IsPessimistic {
+		err = e.handlePessimisticLoadData(ctx, &task)
+	} else {
+		err = e.CheckAndInsertOneBatch(ctx, task.rows, task.cnt)
+	}
 	if err != nil {
 		logutil.Logger(ctx).Error("commit error CheckAndInsert", zap.Error(err))
-		return err
+		return false, err
 	}
 	failpoint.Inject("commitOneTaskErr", func() error {
 		return errors.New("mock commit one task error")
 	})
 	e.Ctx.StmtCommit()
+	if inTxn {
+		return false, err
+	}
 	// Make sure process stream routine never use invalid txn
 	e.txnInUse.Lock()
 	defer e.txnInUse.Unlock()
 	// Make sure that there are no retries when committing.
 	if err = e.Ctx.RefreshTxnCtx(ctx); err != nil {
 		logutil.Logger(ctx).Error("commit error refresh", zap.Error(err))
-		return err
+		return true, err
 	}
-	return err
+	return true, err
 }
 
 // CommitWork commit batch sequentially
@@ -356,8 +478,11 @@ func (e *LoadDataInfo) CommitWork(ctx context.Context) error {
 			e.ctx.StmtRollback()
 		}
 	}()
-	var tasks uint64
-	var end = false
+	var (
+		tasks     int
+		end       = false
+		committed = false
+	)
 	for !end {
 		select {
 		case <-e.QuitCh:
@@ -367,16 +492,22 @@ func (e *LoadDataInfo) CommitWork(ctx context.Context) error {
 		case commitTask, ok := <-e.commitTaskQueue:
 			if ok {
 				start := time.Now()
-				err = e.CommitOneTask(ctx, commitTask)
+				committed, err = e.CommitOneTask(ctx, commitTask)
 				if err != nil {
 					break
 				}
 				tasks++
-				logutil.Logger(ctx).Info("commit one task success",
-					zap.Duration("commit time usage", time.Since(start)),
-					zap.Uint64("keys processed", commitTask.cnt),
-					zap.Uint64("tasks processed", tasks),
-					zap.Int("tasks in queue", len(e.commitTaskQueue)))
+				message := "load data commit one task"
+				logger := logutil.Logger(ctx)
+				if !committed {
+					message = "load data save one task to current txn"
+					logger = logger.With(zap.Uint64("startTS", e.Ctx.GetSessionVars().TxnCtx.StartTS))
+				}
+				logger.Info(message,
+					zap.Duration("time", time.Since(start)),
+					zap.Uint64("rows", commitTask.cnt),
+					zap.Int("processed-tasks", tasks),
+					zap.Int("pending-tasks", len(e.commitTaskQueue)))
 			} else {
 				end = true
 			}

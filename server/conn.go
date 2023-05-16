@@ -1740,9 +1740,13 @@ func (cc *clientConn) handleLoadData(ctx context.Context, loadDataInfo *executor
 	loadDataInfo.StartStopWatcher()
 	// let stop watcher goroutine quit
 	defer loadDataInfo.ForceQuit()
-	err = sessiontxn.NewTxn(ctx, loadDataInfo.Ctx)
-	if err != nil {
-		return err
+	if vars := loadDataInfo.Ctx.GetSessionVars(); vars.InTxn() {
+		logutil.Logger(ctx).Info("load data in explicit txn", zap.Uint64("startTS", vars.TxnCtx.StartTS))
+	} else {
+		err = sessiontxn.NewTxn(ctx, loadDataInfo.Ctx)
+		if err != nil {
+			return err
+		}
 	}
 	// processStream process input data, enqueue commit task
 	wg := new(sync.WaitGroup)
