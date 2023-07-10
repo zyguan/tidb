@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/util/logutil"
 	"github.com/pkg/errors"
+	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	pd "github.com/tikv/pd/client"
@@ -21,7 +24,23 @@ import (
 )
 
 func main() {
-	pd := flag.String("pd", "127.0.0.1:2379", "pd address")
+	var (
+		sec config.Security
+		pds []string
+	)
+	split := func(arg *[]string) func(s string) error {
+		return func(s string) error {
+			if len(s) > 0 {
+				*arg = strings.Split(s, ",")
+			}
+			return nil
+		}
+	}
+	flag.StringVar(&sec.ClusterSSLCA, "ssl-ca", "", "path to ssl ca file")
+	flag.StringVar(&sec.ClusterSSLCert, "ssl-cert", "", "path to ssl cert file")
+	flag.StringVar(&sec.ClusterSSLKey, "ssl-key", "", "path to ssl key file")
+	flag.Func("verify-cn", "verify certificate common name", split(&sec.ClusterVerifyCN))
+	flag.Func("pd", "pd address", split(&pds))
 	flag.Parse()
 	if flag.NArg() == 0 {
 		fmt.Println("Usage: unsafe-destroy-tables <table_id> [table_id...]")
@@ -35,29 +54,82 @@ func main() {
 		}
 		tids[i] = tid
 	}
-	unsafeDestroyTables(context.Background(), []string{*pd}, tids)
+	ctx := context.Background()
+	cli := mustOpen(ctx, pds, sec)
+	defer cli.Close()
+	unsafeDestroyTables(context.Background(), cli, tids)
 }
 
-func unsafeDestroyTables(ctx context.Context, pds []string, tids []int64) {
-	pdClient, err := tikv.NewPDClient(pds)
-	if err != nil {
-		logutil.Logger(ctx).Fatal("[unsafe-destroy] delete ranges: got an error while trying to create pd client",
-			zap.Error(err))
-	}
-	defer pdClient.Close()
-	spkv, err := tikv.NewEtcdSafePointKV(pds, nil)
-	if err != nil {
-		logutil.Logger(ctx).Fatal("[unsafe-destroy] delete ranges: got an error while trying to create safe point kv",
-			zap.Error(err))
-	}
-	defer spkv.Close()
-	tikvStore, err := tikv.NewKVStore(fmt.Sprintf("tikv-%v", pdClient.GetClusterID(ctx)), pdClient, spkv, tikv.NewRPCClient())
-	if err != nil {
-		logutil.Logger(ctx).Fatal("[unsafe-destroy] delete ranges: got an error while trying to create tikv store",
-			zap.Error(err))
-	}
-	defer tikvStore.Close()
+type ClientSet struct {
+	PD   pd.Client
+	KV   *tikv.KVStore
+	SPKV *tikv.EtcdSafePointKV
+}
 
+func (c *ClientSet) Close() error {
+	c.SPKV.Close()
+	c.KV.Close()
+	c.PD.Close()
+	return nil
+}
+
+func mustOpen(ctx context.Context, pds []string, sec config.Security) *ClientSet {
+	var (
+		err        error
+		cli        ClientSet
+		tlsConfig  *tls.Config
+		tlsEnabled = len(sec.ClusterSSLCA) > 0
+	)
+	if tlsEnabled {
+		tlsConfig, err = sec.ToTLSConfig()
+		if err != nil {
+			logutil.Logger(ctx).Fatal("[unsafe-destroy] got an error while trying to build tls config",
+				zap.Error(err))
+		}
+	}
+
+	if tlsEnabled {
+		cli.PD, err = pd.NewClient(pds, pd.SecurityOption{
+			CAPath:   sec.ClusterSSLCA,
+			CertPath: sec.ClusterSSLCert,
+			KeyPath:  sec.ClusterSSLKey,
+		})
+	} else {
+		cli.PD, err = pd.NewClient(pds, pd.SecurityOption{})
+	}
+	if err != nil {
+		logutil.Logger(ctx).Fatal("[unsafe-destroy] got an error while trying to create pd client",
+			zap.Error(err))
+	}
+
+	if tlsEnabled {
+		cli.SPKV, err = tikv.NewEtcdSafePointKV(pds, tlsConfig)
+	} else {
+		cli.SPKV, err = tikv.NewEtcdSafePointKV(pds, nil)
+	}
+	if err != nil {
+		cli.PD.Close()
+		logutil.Logger(ctx).Fatal("[unsafe-destroy] got an error while trying to create safe point kv",
+			zap.Error(err))
+	}
+
+	rpcClient := tikv.NewRPCClient(tikv.WithSecurity(sec))
+	if tlsEnabled {
+		cli.KV, err = tikv.NewKVStore(fmt.Sprintf("tikv-%v", cli.PD.GetClusterID(ctx)), cli.PD, cli.SPKV, rpcClient, tikv.WithPDHTTPClient(tlsConfig, pds))
+	} else {
+		cli.KV, err = tikv.NewKVStore(fmt.Sprintf("tikv-%v", cli.PD.GetClusterID(ctx)), cli.PD, cli.SPKV, rpcClient)
+	}
+	if err != nil {
+		cli.SPKV.Close()
+		cli.PD.Close()
+		logutil.Logger(ctx).Fatal("[unsafe-destroy] got an error while trying to create tikv store",
+			zap.Error(err))
+	}
+
+	return &cli
+}
+
+func unsafeDestroyTables(ctx context.Context, cli *ClientSet, tids []int64) {
 	for _, tid := range tids {
 		startKey := tablecodec.EncodeTablePrefix(tid)
 		endKey := tablecodec.EncodeTablePrefix(tid + 1)
@@ -66,7 +138,7 @@ func unsafeDestroyTables(ctx context.Context, pds []string, tids []int64) {
 			zap.Int64("tableID", tid),
 			zap.Stringer("startKey", startKey),
 			zap.Stringer("endKey", endKey))
-		err := doUnsafeDestroyRangeRequest(ctx, pdClient, tikvStore, startKey, endKey)
+		err := doUnsafeDestroyRangeRequest(ctx, cli.PD, cli.KV, startKey, endKey)
 		if err != nil {
 			logutil.Logger(ctx).Error("[unsafe-destroy] unsafe delete range failed",
 				zap.Int64("tableID", tid),
