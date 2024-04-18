@@ -5,20 +5,22 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/debugpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
-	"github.com/pingcap/tidb/tablecodec"
-	"github.com/pingcap/tidb/util/logutil"
+	"github.com/pingcap/tidb/pkg/tablecodec"
+	"github.com/pingcap/tidb/pkg/util/logutil"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
 
-func newMvccCmd(out Output, flags *ClientFlags) *cobra.Command {
+func newMvccCmd(out Output) *cobra.Command {
+	var flags ClientFlags
 	cmd := &cobra.Command{
 		Use:   "mvcc",
 		Short: "MVCC utilities",
 	}
-	cmd.AddCommand(newMvccGetCmd(out, flags))
-	cmd.AddCommand(newMvccScanCmd(out, flags))
-	cmd.AddCommand(newMvccScanTableCmd(out, flags))
+	flags.RegisterPFlags(cmd.PersistentFlags())
+	cmd.AddCommand(newMvccGetCmd(out, &flags))
+	cmd.AddCommand(newMvccScanCmd(out, &flags))
+	cmd.AddCommand(newMvccScanTableCmd(out, &flags))
 	return cmd
 }
 

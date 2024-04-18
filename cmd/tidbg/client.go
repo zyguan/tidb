@@ -11,6 +11,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -113,9 +114,6 @@ func (cli *ClientSet) GetKV(flags ClientFlags) (*tikv.KVStore, error) {
 		return nil, err
 	}
 	uuid := fmt.Sprintf("tikv-%v", c.GetClusterID(context.TODO()))
-	if err != nil {
-		return nil, err
-	}
 	s, err := tikv.NewKVStore(uuid, c, spkv, tikv.NewRPCClient())
 	if err != nil {
 		return nil, err
@@ -135,7 +133,7 @@ func (cli *ClientSet) GetDebug(flags ClientFlags) (debugpb.DebugClient, error) {
 	if len(kvs) == 0 {
 		return nil, errors.New("kv endpoint is required")
 	}
-	cc, err := grpc.Dial(kvs[0], grpc.WithInsecure())
+	cc, err := grpc.Dial(kvs[0], grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}

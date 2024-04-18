@@ -2,39 +2,53 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/tidb/util/logutil"
+	"github.com/pingcap/tidb/pkg/util/logutil"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
 
 type Output interface {
 	Dump(x any) error
+	Raw(bool)
 }
 
-type OutputFunc func(x any) error
+type output struct {
+	out io.Writer
+	raw bool
+}
 
-func (f OutputFunc) Dump(x any) error { return f(x) }
+func (o *output) Raw(raw bool) { o.raw = raw }
+
+func (o *output) Dump(x any) (err error) {
+	if o.raw {
+		_, err = fmt.Fprintln(o.out, x)
+	} else {
+		err = json.NewEncoder(o.out).Encode(x)
+	}
+	return
+}
 
 func newRootCmd() *cobra.Command {
 	var (
 		path  string
-		enc   = json.NewEncoder(os.Stdout)
-		out   = OutputFunc(func(x any) error { return enc.Encode(x) })
+		out   = &output{out: os.Stdout}
 		close func() error
-		flags ClientFlags
 	)
 	cmd := &cobra.Command{
-		Use: "tidbg",
+		Use:          "tidbg",
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if len(path) > 0 {
 				f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 				if err != nil {
 					return err
 				}
-				enc = json.NewEncoder(f)
+				out.out = f
 				close = f.Close
 			}
 			return nil
@@ -46,10 +60,11 @@ func newRootCmd() *cobra.Command {
 			return nil
 		},
 	}
-	flags.RegisterPFlags(cmd.PersistentFlags())
 	cmd.PersistentFlags().StringVarP(&path, "output", "o", "", "Output path.")
 	cmd.AddCommand(newCodecCmd(out))
-	cmd.AddCommand(newMvccCmd(out, &flags))
+	cmd.AddCommand(newTableCmd(out))
+	cmd.AddCommand(newPlanCmd(out))
+	cmd.AddCommand(newMvccCmd(out))
 	return cmd
 }
 
@@ -67,6 +82,7 @@ func mustReplaceLogOut() {
 
 func main() {
 	mustReplaceLogOut()
+	cobra.EnableCommandSorting = false
 	if err := newRootCmd().Execute(); err != nil {
 		logutil.BgLogger().Fatal("execute error", zap.Error(err))
 	}
