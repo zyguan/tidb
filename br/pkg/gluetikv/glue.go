@@ -9,10 +9,10 @@ import (
 	"github.com/pingcap/tidb/br/pkg/summary"
 	"github.com/pingcap/tidb/br/pkg/utils"
 	"github.com/pingcap/tidb/br/pkg/version/build"
-	"github.com/pingcap/tidb/config"
-	"github.com/pingcap/tidb/domain"
-	"github.com/pingcap/tidb/kv"
-	"github.com/pingcap/tidb/store/driver"
+	"github.com/pingcap/tidb/pkg/config"
+	"github.com/pingcap/tidb/pkg/domain"
+	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/store/driver"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -67,4 +67,9 @@ func (Glue) Record(name string, val uint64) {
 // GetVersion implements glue.Glue.
 func (Glue) GetVersion() string {
 	return "BR\n" + build.Info()
+}
+
+// UseOneShotSession implements glue.Glue.
+func (g Glue) UseOneShotSession(store kv.Storage, closeDomain bool, fn func(glue.Session) error) error {
+	return nil
 }

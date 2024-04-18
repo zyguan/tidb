@@ -8,11 +8,10 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/tidb/util/dbutil"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/tidb/br/pkg/utils"
 	tcontext "github.com/pingcap/tidb/dumpling/context"
+	"github.com/pingcap/tidb/pkg/util/dbutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -75,7 +74,7 @@ type noopBackoffer struct {
 	attempt int
 }
 
-func (b *noopBackoffer) NextBackoff(err error) time.Duration {
+func (b *noopBackoffer) NextBackoff(_ error) time.Duration {
 	b.attempt--
 	return time.Duration(0)
 }
@@ -88,8 +87,8 @@ func (b *noopBackoffer) Reset() {
 	b.attempt = 1
 }
 
-func newLockTablesBackoffer(tctx *tcontext.Context, blockList map[string]map[string]interface{}, conf *Config) *lockTablesBackoffer {
-	if conf.specifiedTables {
+func newLockTablesBackoffer(tctx *tcontext.Context, blockList map[string]map[string]any, conf *Config) *lockTablesBackoffer {
+	if conf.SpecifiedTables {
 		return &lockTablesBackoffer{
 			tctx:      tctx,
 			attempt:   1,
@@ -106,7 +105,7 @@ func newLockTablesBackoffer(tctx *tcontext.Context, blockList map[string]map[str
 type lockTablesBackoffer struct {
 	tctx      *tcontext.Context
 	attempt   int
-	blockList map[string]map[string]interface{}
+	blockList map[string]map[string]any
 }
 
 func (b *lockTablesBackoffer) NextBackoff(err error) time.Duration {
@@ -120,7 +119,7 @@ func (b *lockTablesBackoffer) NextBackoff(err error) time.Duration {
 			return 0
 		}
 		if _, ok := b.blockList[db]; !ok {
-			b.blockList[db] = make(map[string]interface{})
+			b.blockList[db] = make(map[string]any)
 		}
 		b.blockList[db][table] = struct{}{}
 		return 0
