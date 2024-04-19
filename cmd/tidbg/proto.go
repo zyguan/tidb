@@ -161,11 +161,3 @@ func unescape(s string) (ch string, tail string, err error) {
 	}
 	return "", "", fmt.Errorf(`unknown escape \%c`, r)
 }
-
-func isQuote(c byte) bool {
-	switch c {
-	case '"', '\'':
-		return true
-	}
-	return false
-}
