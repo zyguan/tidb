@@ -60,10 +60,8 @@ func newRootCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.PersistentFlags().StringVarP(&path, "output", "o", "", "Output path.")
-	cmd.AddCommand(newCodecCmd(out))
-	cmd.AddCommand(newTableCmd(out))
-	cmd.AddCommand(newPlanCmd(out))
+	cmd.PersistentFlags().StringVarP(&path, "output", "o", "", "output path")
+	cmd.AddCommand(newEvalCmd(out))
 	cmd.AddCommand(newMvccCmd(out))
 	return cmd
 }
@@ -84,6 +82,6 @@ func main() {
 	mustReplaceLogOut()
 	cobra.EnableCommandSorting = false
 	if err := newRootCmd().Execute(); err != nil {
-		logutil.BgLogger().Fatal("execute error", zap.Error(err))
+		os.Exit(1)
 	}
 }

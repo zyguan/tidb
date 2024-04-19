@@ -26,13 +26,13 @@ type ClientFlags struct {
 }
 
 func (cfg *ClientFlags) RegisterPFlags(flags *pflag.FlagSet) {
-	flags.StringVarP(&cfg.User, "user", "u", "root", "Username to connect to the database.")
-	flags.StringVarP(&cfg.Pass, "password", "p", "", "Password to connect to the database.")
-	flags.StringVarP(&cfg.Host, "host", "h", "127.0.0.1", "Host of the database.")
-	flags.IntVarP(&cfg.Port, "port", "P", 4000, "Port number to use for connection.")
-	flags.StringVar(&cfg.PD, "pd", "", "PD address to connect. (eg. 127.0.0.1:2379)")
-	flags.StringVar(&cfg.KV, "kv", "", "TiKV address to connect. (eg. 127.0.0.1:20160)")
-	flags.Bool("help", false, "Help message.")
+	flags.StringVarP(&cfg.User, "user", "u", "root", "username to connect to the database")
+	flags.StringVarP(&cfg.Pass, "password", "p", "", "password to connect to the database")
+	flags.StringVarP(&cfg.Host, "host", "h", "127.0.0.1", "host of the database")
+	flags.IntVarP(&cfg.Port, "port", "P", 4000, "port number to use for connection")
+	flags.StringVar(&cfg.PD, "pd", "", "pdd address to connect (eg. 127.0.0.1:2379)")
+	flags.StringVar(&cfg.KV, "kv", "", "tikv address to connect (eg. 127.0.0.1:20160)")
+	flags.Bool("help", false, "help message")
 }
 
 type ClientSet struct {

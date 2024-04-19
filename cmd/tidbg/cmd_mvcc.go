@@ -98,9 +98,9 @@ func newMvccScanCmd(out Output, flags *ClientFlags) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BytesHexVarP(&req.FromKey, "from", "f", []byte{}, "Scan from key.")
-	cmd.Flags().BytesHexVarP(&req.ToKey, "to", "t", []byte{}, "Scan to key.")
-	cmd.Flags().Uint64Var(&req.Limit, "limit", 0, "Scan limit.")
+	cmd.Flags().BytesHexVarP(&req.FromKey, "from", "f", []byte{}, "scan from key")
+	cmd.Flags().BytesHexVarP(&req.ToKey, "to", "t", []byte{}, "scan to key")
+	cmd.Flags().Uint64Var(&req.Limit, "limit", 0, "scan limit")
 	return cmd
 }
 
@@ -147,6 +147,6 @@ func newMvccScanTableCmd(out Output, flags *ClientFlags) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&filter, "filter", "test.*", "Table filter.")
+	cmd.Flags().StringVar(&filter, "filter", "test.*", "table filter")
 	return cmd
 }
