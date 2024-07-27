@@ -21,11 +21,13 @@ require (
 	github.com/bazelbuild/rules_go v0.42.1-0.20231101215950-df20c987afcb
 	github.com/blacktear23/go-proxyprotocol v1.0.6
 	github.com/butuzov/mirror v1.2.0
+	github.com/bytedance/gopkg v0.0.0-20240507064146-197ded923ae3
 	github.com/carlmjohnson/flagext v0.21.0
 	github.com/charithe/durationcheck v0.0.10
 	github.com/cheggaaa/pb/v3 v3.0.8
 	github.com/cheynewallace/tabby v1.1.1
 	github.com/cloudfoundry/gosigar v1.3.6
+	github.com/cloudwego/netpoll v0.6.2
 	github.com/cockroachdb/errors v1.11.1
 	github.com/cockroachdb/pebble v1.1.0
 	github.com/coocood/freecache v1.2.1

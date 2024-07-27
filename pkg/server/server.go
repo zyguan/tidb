@@ -48,6 +48,8 @@ import (
 	"unsafe"
 
 	"github.com/blacktear23/go-proxyprotocol"
+	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/cloudwego/netpoll"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	autoid "github.com/pingcap/tidb/pkg/autoid_service"
@@ -456,8 +458,29 @@ func (s *Server) Run(dom *domain.Domain) error {
 	// To prevent misuse, set a flag to indicate that register new error will panic immediately.
 	// For regression of issue like https://github.com/pingcap/tidb/issues/28190
 	terror.RegisterFinish()
-	go s.startNetworkListener(s.listener, false, errChan)
-	go s.startNetworkListener(s.socket, true, errChan)
+	if strings.ToLower(os.Getenv("TIDB_SERVER_MODE")) == "netpoll" {
+		el, err := netpoll.NewEventLoop(
+			nil,
+			netpoll.WithOnConnect(func(ctx context.Context, c netpoll.Connection) context.Context {
+				clientConn := s.newConn(c)
+				if s.dom != nil && s.dom.IsLostConnectionToPD() {
+					logutil.BgLogger().Warn("reject connection due to lost connection to PD")
+					terror.Log(clientConn.Close())
+					return ctx
+				}
+				gopool.CtxGo(ctx, func() { s.onConn(clientConn) })
+				return logutil.WithConnID(context.Background(), clientConn.connectionID)
+			}),
+		)
+		if err != nil {
+			log.Error("failed to create the server", zap.Error(err), zap.Stack("stack"))
+			return err
+		}
+		go el.Serve(s.listener)
+	} else {
+		go s.startNetworkListener(s.listener, false, errChan)
+		go s.startNetworkListener(s.socket, true, errChan)
+	}
 	if RunInGoTest && !isClosed(RunInGoTestChan) {
 		close(RunInGoTestChan)
 	}

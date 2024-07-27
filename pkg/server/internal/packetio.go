@@ -42,6 +42,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/cloudwego/netpoll"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -70,6 +71,7 @@ type PacketIO struct {
 	zstdLevel            zstd.EncoderLevel
 	sequence             uint8
 	compressedSequence   uint8
+	netpoll              bool
 }
 
 // NewPacketIO creates a new PacketIO with given net.Conn.
@@ -131,6 +133,7 @@ func (p *PacketIO) SetCompressionAlgorithm(ca int) {
 func (p *PacketIO) SetBufferedReadConn(bufReadConn *util.BufferedReadConn) {
 	p.bufReadConn = bufReadConn
 	p.bufWriter = bufio.NewWriterSize(bufReadConn, defaultWriterSize)
+	_, p.netpoll = bufReadConn.Conn.(netpoll.Connection)
 }
 
 // SetReadTimeout sets the read timeout of PacketIO.
@@ -141,7 +144,7 @@ func (p *PacketIO) SetReadTimeout(timeout time.Duration) {
 func (p *PacketIO) readOnePacket() ([]byte, error) {
 	var header [4]byte
 	r := io.NopCloser(p.bufReadConn)
-	if p.readTimeout > 0 {
+	if p.readTimeout > 0 && !p.netpoll {
 		if err := p.bufReadConn.SetReadDeadline(time.Now().Add(p.readTimeout)); err != nil {
 			return nil, err
 		}
@@ -178,7 +181,7 @@ func (p *PacketIO) readOnePacket() ([]byte, error) {
 	}
 
 	data := make([]byte, length)
-	if p.readTimeout > 0 {
+	if p.readTimeout > 0 && !p.netpoll {
 		if err := p.bufReadConn.SetReadDeadline(time.Now().Add(p.readTimeout)); err != nil {
 			return nil, err
 		}
@@ -207,7 +210,7 @@ func (p *PacketIO) SetMaxAllowedPacket(maxAllowedPacket uint64) {
 // ReadPacket reads a packet from the connection.
 func (p *PacketIO) ReadPacket() ([]byte, error) {
 	p.accumulatedLength = 0
-	if p.readTimeout == 0 {
+	if p.readTimeout == 0 && !p.netpoll {
 		if err := p.bufReadConn.SetReadDeadline(time.Time{}); err != nil {
 			return nil, errors.Trace(err)
 		}
