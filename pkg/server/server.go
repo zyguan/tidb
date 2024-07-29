@@ -48,7 +48,6 @@ import (
 	"unsafe"
 
 	"github.com/blacktear23/go-proxyprotocol"
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/cloudwego/netpoll"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -123,6 +122,8 @@ type Server struct {
 	listener          net.Listener
 	socket            net.Listener
 	concurrentLimiter *util.TokenLimiter
+
+	netpollAccept chan netpoll.Connection
 
 	rwlock  sync.RWMutex
 	clients map[uint64]*clientConn
@@ -459,17 +460,12 @@ func (s *Server) Run(dom *domain.Domain) error {
 	// For regression of issue like https://github.com/pingcap/tidb/issues/28190
 	terror.RegisterFinish()
 	if strings.ToLower(os.Getenv("TIDB_SERVER_MODE")) == "netpoll" {
+		s.netpollAccept = make(chan netpoll.Connection, 1)
 		el, err := netpoll.NewEventLoop(
 			nil,
 			netpoll.WithOnConnect(func(ctx context.Context, c netpoll.Connection) context.Context {
-				clientConn := s.newConn(c)
-				if s.dom != nil && s.dom.IsLostConnectionToPD() {
-					logutil.BgLogger().Warn("reject connection due to lost connection to PD")
-					terror.Log(clientConn.Close())
-					return ctx
-				}
-				gopool.CtxGo(ctx, func() { s.onConn(clientConn) })
-				return logutil.WithConnID(context.Background(), clientConn.connectionID)
+				s.netpollAccept <- c
+				return context.Background()
 			}),
 		)
 		if err != nil {
@@ -477,10 +473,9 @@ func (s *Server) Run(dom *domain.Domain) error {
 			return err
 		}
 		go el.Serve(s.listener)
-	} else {
-		go s.startNetworkListener(s.listener, false, errChan)
-		go s.startNetworkListener(s.socket, true, errChan)
 	}
+	go s.startNetworkListener(s.listener, false, errChan)
+	go s.startNetworkListener(s.socket, true, errChan)
 	if RunInGoTest && !isClosed(RunInGoTestChan) {
 		close(RunInGoTestChan)
 	}
@@ -508,8 +503,16 @@ func (s *Server) startNetworkListener(listener net.Listener, isUnixSocket bool, 
 		errChan <- nil
 		return
 	}
+	var (
+		conn net.Conn
+		err  error
+	)
 	for {
-		conn, err := listener.Accept()
+		if s.netpollAccept != nil {
+			conn, err = <-s.netpollAccept, nil
+		} else {
+			conn, err = listener.Accept()
+		}
 		if err != nil {
 			if opErr, ok := err.(*net.OpError); ok {
 				if opErr.Err.Error() == "use of closed network connection" {
