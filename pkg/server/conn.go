@@ -55,6 +55,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/cloudwego/netpoll"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
@@ -202,6 +203,8 @@ type clientConn struct {
 
 	// Proxy Protocol Enabled
 	ppEnabled bool
+
+	netpollConn netpoll.Connection
 }
 
 func (cc *clientConn) getCtx() *TiDBContext {
@@ -2483,6 +2486,9 @@ func (cc *clientConn) writeChunksWithFetchSize(ctx context.Context, rs resultset
 }
 
 func (cc *clientConn) setConn(conn net.Conn) {
+	if c, ok := conn.(netpoll.Connection); ok {
+		cc.netpollConn = c
+	}
 	cc.bufReadConn = util2.NewBufferedReadConn(conn)
 	if cc.pkt == nil {
 		cc.pkt = internal.NewPacketIO(cc.bufReadConn)
