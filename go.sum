@@ -852,8 +852,6 @@ github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
 github.com/tidwall/btree v1.7.0 h1:L1fkJH/AuEh5zBnnBbmTwQ5Lt+bRJ5A8EWecslvo9iI=
 github.com/tidwall/btree v1.7.0/go.mod h1:twD9XRA5jj9VUQGELzDO4HPQTNJsoWWfYEL+EUQ2cKY=
-github.com/tikv/client-go/v2 v2.0.8-0.20240731051227-3ac46e817134 h1:RpX9218sievAbU6gZvD3q30XP74JHCh7ua5xWFFnx3o=
-github.com/tikv/client-go/v2 v2.0.8-0.20240731051227-3ac46e817134/go.mod h1:4HDOAx8OXAJPtqhCZ03IhChXgaFs4B3+vSrPWmiPxjg=
 github.com/tikv/pd/client v0.0.0-20240724130437-83f32e9221f2 h1:jrCLJvHk7Awmr2A0n93D44FUQGGAU9pteGHWB90MAKw=
 github.com/tikv/pd/client v0.0.0-20240724130437-83f32e9221f2/go.mod h1:TxrJRY949Vl14Lmarx6hTNP/HEDYzn4dP0KmjdzQ59w=
 github.com/timakin/bodyclose v0.0.0-20240125160201-f835fa56326a h1:A6uKudFIfAEpoPdaal3aSqGxBzLyU8TqyXImLwo6dIo=
@@ -902,6 +900,8 @@ github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=
 github.com/zeebo/assert v1.3.0/go.mod h1:Pq9JiuJQpG8JLJdtkwrJESF0Foym2/D9XMU5ciN/wJ0=
 github.com/zeebo/xxh3 v1.0.2 h1:xZmwmqxHZA8AI603jOQ0tMqmBr9lPeFwGg6d+xy9DC0=
 github.com/zeebo/xxh3 v1.0.2/go.mod h1:5NWz9Sef7zIDm2JHfFlcQvNekmcEl9ekUZQQKCYaDcA=
+github.com/zyguan/client-go/v2 v2.0.0-alpha.0.20240801070255-743f97ac0747 h1:E3PsEYD0l5kqhTgKmyvlvAr+zO+wcrtZr1QLYbFfbI4=
+github.com/zyguan/client-go/v2 v2.0.0-alpha.0.20240801070255-743f97ac0747/go.mod h1:4HDOAx8OXAJPtqhCZ03IhChXgaFs4B3+vSrPWmiPxjg=
 go.einride.tech/aip v0.66.0 h1:XfV+NQX6L7EOYK11yoHHFtndeaWh3KbD9/cN/6iWEt8=
 go.einride.tech/aip v0.66.0/go.mod h1:qAhMsfT7plxBX+Oy7Huol6YUvZ0ZzdUz26yZsQwfl1M=
 go.etcd.io/bbolt v1.3.5/go.mod h1:G5EMThwa9y8QZGBClrRx5EY+Yw9kAhnjy3bSjsnlVTQ=
