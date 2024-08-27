@@ -594,6 +594,15 @@ func (e *IndexLookUpExecutor) open(_ context.Context) error {
 			return err
 		}
 	}
+
+	if e.startTS == 0 {
+		ts, err := e.dataReaderBuilder.getSnapshotTS()
+		if err != nil {
+			return err
+		}
+		e.startTS = ts
+		e.dataReaderBuilder.setDataReaderTS(ts)
+	}
 	return nil
 }
 
@@ -808,7 +817,6 @@ func (e *IndexLookUpExecutor) buildTableReader(ctx context.Context, task *lookup
 		tableReaderExecutorContext: newTableReaderExecutorContext(e.Ctx()),
 		table:                      table,
 		dagPB:                      e.tableRequest,
-		startTS:                    e.startTS,
 		txnScope:                   e.txnScope,
 		readReplicaScope:           e.readReplicaScope,
 		isStaleness:                e.isStaleness,

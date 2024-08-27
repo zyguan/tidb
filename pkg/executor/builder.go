@@ -2921,13 +2921,25 @@ func (b *executorBuilder) newDataReaderBuilder(p plannercore.PhysicalPlan) (*dat
 	}
 
 	builderForDataReader := *b
-	builderForDataReader.forDataReaderBuilder = true
-	builderForDataReader.dataReaderTS = ts
+	builderForDataReader.setDataReaderTS(ts)
 
 	return &dataReaderBuilder{
 		plan:            p,
 		executorBuilder: &builderForDataReader,
 	}, nil
+}
+
+func (b *executorBuilder) newLazyDataReaderBuilder(p plannercore.PhysicalPlan) *dataReaderBuilder {
+	builderForDataReader := *b
+	return &dataReaderBuilder{
+		plan:            p,
+		executorBuilder: &builderForDataReader,
+	}
+}
+
+func (b *executorBuilder) setDataReaderTS(ts uint64) {
+	b.forDataReaderBuilder = true
+	b.dataReaderTS = ts
 }
 
 func (b *executorBuilder) buildIndexLookUpJoin(v *plannercore.PhysicalIndexJoin) exec.Executor {
@@ -3732,21 +3744,11 @@ func buildNoRangeIndexLookUpReader(b *executorBuilder, v *plannercore.PhysicalIn
 		return nil, err
 	}
 	ts := v.TablePlans[0].(*plannercore.PhysicalTableScan)
-	startTS, err := b.getSnapshotTS()
-	if err != nil {
-		return nil, err
-	}
-
-	readerBuilder, err := b.newDataReaderBuilder(nil)
-	if err != nil {
-		return nil, err
-	}
 
 	e := &IndexLookUpExecutor{
 		BaseExecutor:       exec.NewBaseExecutor(b.ctx, v.Schema(), v.ID()),
 		indexUsageReporter: b.buildIndexUsageReporter(v),
 		dagPB:              indexReq,
-		startTS:            startTS,
 		table:              tbl,
 		index:              is.Index,
 		keepOrder:          is.KeepOrder,
@@ -3755,7 +3757,7 @@ func buildNoRangeIndexLookUpReader(b *executorBuilder, v *plannercore.PhysicalIn
 		tableRequest:       tableReq,
 		columns:            ts.Columns,
 		indexPaging:        indexPaging,
-		dataReaderBuilder:  readerBuilder,
+		dataReaderBuilder:  b.newLazyDataReaderBuilder(nil),
 		corColInIdxSide:    b.corColInDistPlan(v.IndexPlans),
 		corColInTblSide:    b.corColInDistPlan(v.TablePlans),
 		corColInAccess:     b.corColInAccess(v.IndexPlans[0]),
