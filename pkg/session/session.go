@@ -2508,6 +2508,9 @@ func (s *session) Close() {
 	s.RollbackTxn(ctx)
 	if s.sessionVars != nil {
 		s.sessionVars.WithdrawAllPreparedStmt()
+		if s.sessionVars.GoPool != nil {
+			s.sessionVars.GoPool.Close()
+		}
 	}
 	if s.stmtStats != nil {
 		s.stmtStats.SetFinished()
@@ -2555,6 +2558,7 @@ func (s *session) GetDistSQLCtx() *distsqlctx.DistSQLContext {
 			KVVars:                 vars.KVVars,
 			KvExecCounter:          sc.KvExecCounter,
 			SessionMemTracker:      vars.MemTracker,
+			Pool:                   vars.GoPool,
 
 			Location:         sc.TimeZone(),
 			RuntimeStatsColl: sc.RuntimeStatsColl,

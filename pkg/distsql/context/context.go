@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/execdetails"
+	"github.com/pingcap/tidb/pkg/util/gopool"
 	"github.com/pingcap/tidb/pkg/util/memory"
 	"github.com/pingcap/tidb/pkg/util/nocopy"
 	"github.com/pingcap/tidb/pkg/util/sqlkiller"
@@ -48,6 +49,7 @@ type DistSQLContext struct {
 	KVVars                 *tikvstore.Variables
 	KvExecCounter          *stmtstats.KvExecCounter
 	SessionMemTracker      *memory.Tracker
+	Pool                   *gopool.Pool
 
 	Location         *time.Location
 	RuntimeStatsColl *execdetails.RuntimeStatsColl

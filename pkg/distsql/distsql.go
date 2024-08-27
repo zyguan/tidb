@@ -82,6 +82,10 @@ func Select(ctx context.Context, dctx *distsqlctx.DistSQLContext, kvReq *kv.Requ
 		EnableCollectExecutionInfo: config.GetGlobalConfig().Instance.EnableCollectExecutionInfo.Load(),
 	}
 
+	if dctx.Pool != nil {
+		option.Spawn = dctx.Pool.Go
+	}
+
 	if kvReq.StoreType == kv.TiFlash {
 		ctx = SetTiFlashConfVarsInContext(ctx, dctx)
 		option.TiFlashReplicaRead = dctx.TiFlashReplicaRead

@@ -104,7 +104,7 @@ func (c *CopClient) Send(ctx context.Context, req *kv.Request, variables any, op
 	if sessionMemTracker != nil && enabledRateLimitAction {
 		sessionMemTracker.FallbackOldAndSetNewAction(it.actionOnExceed)
 	}
-	it.open(ctx, enabledRateLimitAction, option.EnableCollectExecutionInfo)
+	it.open(ctx, enabledRateLimitAction, option.EnableCollectExecutionInfo, option.Spawn)
 	return it
 }
 
@@ -720,6 +720,7 @@ type copIterator struct {
 // copIteratorWorker receives tasks from copIteratorTaskSender, handles tasks and sends the copResponse to respChan.
 type copIteratorWorker struct {
 	taskCh   <-chan *copTask
+	ctx      context.Context
 	wg       *sync.WaitGroup
 	store    *Store
 	req      *kv.Request
@@ -742,6 +743,7 @@ type copIteratorWorker struct {
 
 // copIteratorTaskSender sends tasks to taskCh then wait for the workers to exit.
 type copIteratorTaskSender struct {
+	connID      uint64
 	taskCh      chan<- *copTask
 	smallTaskCh chan<- *copTask
 	wg          *sync.WaitGroup
@@ -814,7 +816,7 @@ func init() {
 
 // run is a worker function that get a copTask from channel, handle it and
 // send the result back.
-func (worker *copIteratorWorker) run(ctx context.Context) {
+func (worker *copIteratorWorker) run() {
 	defer func() {
 		failpoint.Inject("ticase-4169", func(val failpoint.Value) {
 			if val.(bool) {
@@ -833,7 +835,7 @@ func (worker *copIteratorWorker) run(ctx context.Context) {
 		if respCh == nil {
 			respCh = task.respChan
 		}
-		worker.handleTask(ctx, task, respCh)
+		worker.handleTask(worker.ctx, task, respCh)
 		if worker.respChan != nil {
 			// When a task is finished by the worker, send a finCopResp into channel to notify the copIterator that
 			// there is a task finished.
@@ -850,7 +852,7 @@ func (worker *copIteratorWorker) run(ctx context.Context) {
 }
 
 // open starts workers and sender goroutines.
-func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableCollectExecutionInfo bool) {
+func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableCollectExecutionInfo bool, spawn func(func())) {
 	taskCh := make(chan *copTask, 1)
 	smallTaskCh := make(chan *copTask, 1)
 	it.unconsumedStats = &unconsumedCopRuntimeStats{}
@@ -865,6 +867,7 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 		}
 		worker := &copIteratorWorker{
 			taskCh:                     ch,
+			ctx:                        ctx,
 			wg:                         &it.wg,
 			store:                      it.store,
 			req:                        it.req,
@@ -880,9 +883,14 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 			storeBatchedFallbackNum:    &it.storeBatchedFallbackNum,
 			unconsumedStats:            it.unconsumedStats,
 		}
-		go worker.run(ctx)
+		if spawn != nil {
+			spawn(worker.run)
+		} else {
+			go worker.run()
+		}
 	}
 	taskSender := &copIteratorTaskSender{
+		connID:      it.req.ConnID,
 		taskCh:      taskCh,
 		smallTaskCh: smallTaskCh,
 		wg:          &it.wg,
@@ -898,10 +906,14 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 			it.memTracker.Consume(10 * MockResponseSizeForTest)
 		}
 	})
-	go taskSender.run(it.req.ConnID)
+	if spawn != nil {
+		spawn(taskSender.run)
+	} else {
+		go taskSender.run()
+	}
 }
 
-func (sender *copIteratorTaskSender) run(connID uint64) {
+func (sender *copIteratorTaskSender) run() {
 	// Send tasks to feed the worker goroutines.
 	for _, t := range sender.tasks {
 		// we control the sending rate to prevent all tasks
@@ -923,7 +935,7 @@ func (sender *copIteratorTaskSender) run(connID uint64) {
 		if exit {
 			break
 		}
-		if connID > 0 {
+		if sender.connID > 0 {
 			failpoint.Inject("pauseCopIterTaskSender", func() {})
 		}
 	}

@@ -867,10 +867,6 @@ github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a h1:J/YdBZ46WKpXsxsW
 github.com/tiancaiamao/gp v0.0.0-20221230034425-4025bc8a4d4a/go.mod h1:h4xBhSNtOeEosLJ4P7JyKXX7Cabg7AVkWCK5gV2vOrM=
 github.com/tidwall/btree v1.7.0 h1:L1fkJH/AuEh5zBnnBbmTwQ5Lt+bRJ5A8EWecslvo9iI=
 github.com/tidwall/btree v1.7.0/go.mod h1:twD9XRA5jj9VUQGELzDO4HPQTNJsoWWfYEL+EUQ2cKY=
-github.com/tikv/client-go/v2 v2.0.8-0.20240516040321-776d981aab13 h1:dZkRAhtwM5Kxw8ivo4m8RAmV7SCQ6hSR3PJWbCGWwdw=
-github.com/tikv/client-go/v2 v2.0.8-0.20240516040321-776d981aab13/go.mod h1:+vXk4Aex17GnI8gfSMPxrL0SQLbBYgP3Db4FvHiImwM=
-github.com/tikv/pd/client v0.0.0-20240430080403-1679dbca25b3 h1:1MReqAoXNPyTarVZ3cihghWrmczF6yj+tmBLkj7g9Oc=
-github.com/tikv/pd/client v0.0.0-20240430080403-1679dbca25b3/go.mod h1:FaQnRpX8ZXMR8pih4xNdNxqDrwZvpu7GMsJKDZyF9pk=
 github.com/timakin/bodyclose v0.0.0-20240125160201-f835fa56326a h1:A6uKudFIfAEpoPdaal3aSqGxBzLyU8TqyXImLwo6dIo=
 github.com/timakin/bodyclose v0.0.0-20240125160201-f835fa56326a/go.mod h1:mkjARE7Yr8qU23YcGMSALbIxTQ9r9QBVahQOBRfU460=
 github.com/tklauser/go-sysconf v0.3.9/go.mod h1:11DU/5sG7UexIrp/O6g35hrWzu0JxlwQ3LSFUzyeuhs=
@@ -926,6 +922,10 @@ github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5t
 github.com/yusufpapurcu/wmi v1.2.2/go.mod h1:SBZ9tNy3G9/m5Oi98Zks0QjeHVDvuK0qfxQmPyzfmi0=
 github.com/yusufpapurcu/wmi v1.2.4 h1:zFUKzehAFReQwLys1b/iSMl+JQGSCSjtVqQn9bBrPo0=
 github.com/yusufpapurcu/wmi v1.2.4/go.mod h1:SBZ9tNy3G9/m5Oi98Zks0QjeHVDvuK0qfxQmPyzfmi0=
+github.com/zyguan/client-go/v2 v2.0.0-alpha.0.20240815072910-dc277134a4e3 h1:h6rzEewyu6oceH4zMjdoZ+YDmkUftMMGsFZ0KkBLjZI=
+github.com/zyguan/client-go/v2 v2.0.0-alpha.0.20240815072910-dc277134a4e3/go.mod h1:ZRi6dG7qQ5Wyc+M4cR/vZhyjF2Ex/9A4DelyXXSi1zo=
+github.com/zyguan/pd/client v0.0.0-20240815072627-5a6f008f6c55 h1:JJZ16EZmA1YMK8XweZi734GvF8PFNZokGu2CkL46aKM=
+github.com/zyguan/pd/client v0.0.0-20240815072627-5a6f008f6c55/go.mod h1:FaQnRpX8ZXMR8pih4xNdNxqDrwZvpu7GMsJKDZyF9pk=
 go.einride.tech/aip v0.66.0 h1:XfV+NQX6L7EOYK11yoHHFtndeaWh3KbD9/cN/6iWEt8=
 go.einride.tech/aip v0.66.0/go.mod h1:qAhMsfT7plxBX+Oy7Huol6YUvZ0ZzdUz26yZsQwfl1M=
 go.etcd.io/bbolt v1.3.5/go.mod h1:G5EMThwa9y8QZGBClrRx5EY+Yw9kAhnjy3bSjsnlVTQ=
