@@ -715,6 +715,8 @@ type copIterator struct {
 
 	runawayChecker  *resourcegroup.RunawayChecker
 	unconsumedStats *unconsumedCopRuntimeStats
+
+	checkKillTicker *time.Ticker
 }
 
 // copIteratorWorker receives tasks from copIteratorTaskSender, handles tasks and sends the copResponse to respChan.
@@ -950,8 +952,9 @@ func (sender *copIteratorTaskSender) run() {
 }
 
 func (it *copIterator) recvFromRespCh(ctx context.Context, respCh <-chan *copResponse) (resp *copResponse, ok bool, exit bool) {
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
+	if it.checkKillTicker == nil {
+		it.checkKillTicker = time.NewTicker(3 * time.Second)
+	}
 	for {
 		select {
 		case resp, ok = <-respCh:
@@ -970,7 +973,7 @@ func (it *copIterator) recvFromRespCh(ctx context.Context, respCh <-chan *copRes
 		case <-it.finishCh:
 			exit = true
 			return
-		case <-ticker.C:
+		case <-it.checkKillTicker.C:
 			killed := atomic.LoadUint32(it.vars.Killed)
 			if killed != 0 {
 				logutil.Logger(ctx).Info(
@@ -1984,6 +1987,9 @@ func (worker *copIteratorWorker) finished() bool {
 func (it *copIterator) Close() error {
 	if atomic.CompareAndSwapUint32(&it.closed, 0, 1) {
 		close(it.finishCh)
+	}
+	if it.checkKillTicker != nil {
+		it.checkKillTicker.Stop()
 	}
 	it.rpcCancel.CancelAll()
 	it.actionOnExceed.close()
