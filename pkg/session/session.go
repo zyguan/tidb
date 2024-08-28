@@ -2004,6 +2004,10 @@ func (s *session) ExecuteStmt(ctx context.Context, stmtNode ast.StmtNode) (sqlex
 	sessVars := s.sessionVars
 	sessVars.StartTime = time.Now()
 
+	if !sessVars.InTxn() && sessVars.ConnectionID > 0 {
+		sessiontxn.GetTxnManager(s).AdviseWarmup()
+	}
+
 	// Some executions are done in compile stage, so we reset them before compile.
 	if err := executor.ResetContextOfStmt(s, stmtNode); err != nil {
 		return nil, err
