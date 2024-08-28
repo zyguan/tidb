@@ -101,7 +101,7 @@ func (c *CopClient) Send(ctx context.Context, req *kv.Request, variables any, op
 		return errRes
 	}
 	ctx = context.WithValue(ctx, tikv.RPCCancellerCtxKey{}, it.rpcCancel)
-	if sessionMemTracker != nil && enabledRateLimitAction {
+	if sessionMemTracker != nil && enabledRateLimitAction && it.actionOnExceed != nil {
 		sessionMemTracker.FallbackOldAndSetNewAction(it.actionOnExceed)
 	}
 	it.open(ctx, enabledRateLimitAction, option.EnableCollectExecutionInfo, option.Spawn)
@@ -148,6 +148,33 @@ func (c *CopClient) BuildCopIterator(ctx context.Context, req *kv.Request, vars 
 		elapsed:  &elapsed,
 	}
 	buildTaskFunc := func(ranges []kv.KeyRange, hints []int) error {
+		if req.StoreType != kv.TiDB && len(ranges) == 1 && ranges[0].IsPoint() {
+			loc, err := buildOpt.cache.LocateKey(bo.TiKVBackoffer(), ranges[0].StartKey)
+			if err != nil {
+				return err
+			}
+			task := &copTask{
+				region:        loc.Region,
+				bucketsVer:    loc.GetBucketVersion(),
+				ranges:        NewKeyRanges(ranges),
+				cmdType:       tikvrpc.CmdCop,
+				storeType:     req.StoreType,
+				eventCb:       eventCb,
+				paging:        req.Paging.Enable,
+				pagingSize:    0,
+				requestSource: req.RequestSource,
+				RowCountHint:  -1,
+				busyThreshold: req.StoreBusyThreshold,
+			}
+			if !buildOpt.ignoreTiKVClientReadTimeout {
+				task.tikvClientReadTimeout = req.TiKVClientReadTimeout
+			}
+			if req.KeepOrder && buildOpt.respChan {
+				task.respChan = make(chan *copResponse, 1)
+			}
+			tasks = append(tasks, task)
+			return nil
+		}
 		keyRanges := NewKeyRanges(ranges)
 		if tryRowHint {
 			buildOpt.rowHints = hints
@@ -206,6 +233,9 @@ func (c *CopClient) BuildCopIterator(ctx context.Context, req *kv.Request, vars 
 	it.tasks = tasks
 	if it.concurrency > len(tasks) {
 		it.concurrency = len(tasks)
+	}
+	if len(tasks) == 1 {
+		return it, nil
 	}
 	if tryRowHint {
 		var smallTasks int
@@ -777,7 +807,8 @@ func (rs *copResponse) GetStartKey() kv.Key {
 }
 
 func (rs *copResponse) GetCopRuntimeStats() *CopRuntimeStats {
-	return rs.detail
+	// return rs.detail
+	return nil
 }
 
 // MemSize returns how many bytes of memory this response use
@@ -827,6 +858,7 @@ func (worker *copIteratorWorker) run() {
 			}
 		})
 		worker.wg.Done()
+		copWorkerPool.Put(worker)
 	}()
 	// 16KB ballast helps grow the stack to the requirement of copIteratorWorker.
 	// This reduces the `morestack` call during the execution of `handleTask`, thus improvement the efficiency of TiDB.
@@ -853,11 +885,19 @@ func (worker *copIteratorWorker) run() {
 	runtime.KeepAlive(ballast)
 }
 
+var copWorkerPool = sync.Pool{New: func() interface{} { return &copIteratorWorker{} }}
+var copSenderPool = sync.Pool{New: func() interface{} { return &copIteratorTaskSender{} }}
+
 // open starts workers and sender goroutines.
 func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableCollectExecutionInfo bool, spawn func(func())) {
-	taskCh := make(chan *copTask, 1)
-	smallTaskCh := make(chan *copTask, 1)
-	it.unconsumedStats = &unconsumedCopRuntimeStats{}
+	var (
+		taskCh      chan *copTask
+		smallTaskCh chan *copTask
+	)
+	taskCh = make(chan *copTask, 1)
+	if it.smallTaskConcurrency > 0 {
+		smallTaskCh = make(chan *copTask, 1)
+	}
 	it.wg.Add(it.concurrency + it.smallTaskConcurrency)
 	// Start it.concurrency number of workers to handle cop requests.
 	for i := 0; i < it.concurrency+it.smallTaskConcurrency; i++ {
@@ -867,7 +907,8 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 		} else {
 			ch = smallTaskCh
 		}
-		worker := &copIteratorWorker{
+		worker := copWorkerPool.Get().(*copIteratorWorker)
+		*worker = copIteratorWorker{
 			taskCh:                     ch,
 			ctx:                        ctx,
 			wg:                         &it.wg,
@@ -883,7 +924,6 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 			pagingTaskIdx:              &it.pagingTaskIdx,
 			storeBatchedNum:            &it.storeBatchedNum,
 			storeBatchedFallbackNum:    &it.storeBatchedFallbackNum,
-			unconsumedStats:            it.unconsumedStats,
 		}
 		if spawn != nil {
 			spawn(worker.run)
@@ -891,7 +931,8 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 			go worker.run()
 		}
 	}
-	taskSender := &copIteratorTaskSender{
+	taskSender := copSenderPool.Get().(*copIteratorTaskSender)
+	*taskSender = copIteratorTaskSender{
 		connID:      it.req.ConnID,
 		taskCh:      taskCh,
 		smallTaskCh: smallTaskCh,
@@ -901,7 +942,9 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 		sendRate:    it.sendRate,
 	}
 	taskSender.respChan = it.respChan
-	it.actionOnExceed.setEnabled(enabledRateLimitAction)
+	if it.actionOnExceed != nil {
+		it.actionOnExceed.setEnabled(enabledRateLimitAction)
+	}
 	failpoint.Inject("ticase-4171", func(val failpoint.Value) {
 		if val.(bool) {
 			it.memTracker.Consume(10 * MockResponseSizeForTest)
@@ -916,6 +959,7 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 }
 
 func (sender *copIteratorTaskSender) run() {
+	defer copSenderPool.Put(sender)
 	// Send tasks to feed the worker goroutines.
 	for _, t := range sender.tasks {
 		// we control the sending rate to prevent all tasks
@@ -923,9 +967,11 @@ func (sender *copIteratorTaskSender) run() {
 		// We keep the number of inflight tasks within the number of 2 * concurrency when Keep Order is true.
 		// If KeepOrder is false, the number equals the concurrency.
 		// It sends one more task if a task has been finished in copIterator.Next.
-		exit := sender.sendRate.GetToken(sender.finishCh)
-		if exit {
-			break
+		if sender.sendRate != nil {
+			exit := sender.sendRate.GetToken(sender.finishCh)
+			if exit {
+				break
+			}
 		}
 		var sendTo chan<- *copTask
 		if isSmallTask(t) {
@@ -933,7 +979,7 @@ func (sender *copIteratorTaskSender) run() {
 		} else {
 			sendTo = sender.taskCh
 		}
-		exit = sender.sendToTaskCh(t, sendTo)
+		exit := sender.sendToTaskCh(t, sendTo)
 		if exit {
 			break
 		}
@@ -942,7 +988,9 @@ func (sender *copIteratorTaskSender) run() {
 		}
 	}
 	close(sender.taskCh)
-	close(sender.smallTaskCh)
+	if sender.smallTaskCh != nil {
+		close(sender.smallTaskCh)
+	}
 
 	// Wait for worker goroutines to exit.
 	sender.wg.Wait()
@@ -1088,20 +1136,26 @@ func (it *copIterator) Next(ctx context.Context) (kv.ResultSubset, error) {
 		// Get next fetched resp from chan
 		resp, ok, closed = it.recvFromRespCh(ctx, it.respChan)
 		if !ok || closed {
-			it.actionOnExceed.close()
+			if it.actionOnExceed != nil {
+				it.actionOnExceed.close()
+			}
 			return nil, nil
 		}
 		if resp == finCopResp {
-			it.actionOnExceed.destroyTokenIfNeeded(func() {
-				it.sendRate.PutToken()
-			})
+			if it.actionOnExceed != nil {
+				it.actionOnExceed.destroyTokenIfNeeded(func() {
+					it.sendRate.PutToken()
+				})
+			}
 			return it.Next(ctx)
 		}
 	} else {
 		for {
 			if it.curr >= len(it.tasks) {
 				// Resp will be nil if iterator is finishCh.
-				it.actionOnExceed.close()
+				if it.actionOnExceed != nil {
+					it.actionOnExceed.close()
+				}
 				return nil, nil
 			}
 			task := it.tasks[it.curr]
@@ -1113,9 +1167,11 @@ func (it *copIterator) Next(ctx context.Context) (kv.ResultSubset, error) {
 			if ok {
 				break
 			}
-			it.actionOnExceed.destroyTokenIfNeeded(func() {
-				it.sendRate.PutToken()
-			})
+			if it.actionOnExceed != nil {
+				it.actionOnExceed.destroyTokenIfNeeded(func() {
+					it.sendRate.PutToken()
+				})
+			}
 			// Switch to next task.
 			it.tasks[it.curr] = nil
 			it.curr++
@@ -1992,7 +2048,9 @@ func (it *copIterator) Close() error {
 		it.checkKillTicker.Stop()
 	}
 	it.rpcCancel.CancelAll()
-	it.actionOnExceed.close()
+	if it.actionOnExceed != nil {
+		it.actionOnExceed.close()
+	}
 	it.wg.Wait()
 	return nil
 }
