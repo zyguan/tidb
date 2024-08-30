@@ -311,6 +311,21 @@ type selectResult struct {
 	paging             bool
 }
 
+func (r *selectResult) resetSelectResp() {
+	if r.selectResp == nil {
+		r.selectResp = new(tipb.SelectResponse)
+		return
+	}
+	*r.selectResp = tipb.SelectResponse{
+		Rows:               r.selectResp.Rows[:0],
+		Chunks:             r.selectResp.Chunks[:0],
+		Warnings:           r.selectResp.Warnings[:0],
+		OutputCounts:       r.selectResp.OutputCounts[:0],
+		ExecutionSummaries: r.selectResp.ExecutionSummaries[:0],
+		Ndvs:               r.selectResp.Ndvs[:0],
+	}
+}
+
 func (r *selectResult) fetchResp(ctx context.Context) error {
 	for {
 		r.respChkIdx = 0
@@ -340,7 +355,7 @@ func (r *selectResult) fetchResp(ctx context.Context) error {
 			}
 			return nil
 		}
-		r.selectResp = new(tipb.SelectResponse)
+		r.resetSelectResp()
 		err = r.selectResp.Unmarshal(resultSubset.GetData())
 		if err != nil {
 			return errors.Trace(err)
