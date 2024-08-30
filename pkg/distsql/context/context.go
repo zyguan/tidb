@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	contextutil "github.com/pingcap/tidb/pkg/util/context"
 	"github.com/pingcap/tidb/pkg/util/execdetails"
+	"github.com/pingcap/tidb/pkg/util/gopool"
 	"github.com/pingcap/tidb/pkg/util/memory"
 	"github.com/pingcap/tidb/pkg/util/sqlkiller"
 	"github.com/pingcap/tidb/pkg/util/tiflash"
@@ -44,6 +45,7 @@ type DistSQLContext struct {
 	KVVars                 *tikvstore.Variables
 	KvExecCounter          *stmtstats.KvExecCounter
 	SessionMemTracker      *memory.Tracker
+	Pool                   gopool.Pool
 
 	Location         *time.Location
 	RuntimeStatsColl *execdetails.RuntimeStatsColl
@@ -83,6 +85,14 @@ type DistSQLContext struct {
 	SessionAlias                string
 
 	ExecDetails *execdetails.SyncExecDetails
+}
+
+func (dctx *DistSQLContext) Go(f func()) {
+	if dctx.Pool != nil {
+		dctx.Pool.Go(f)
+	} else {
+		go f()
+	}
 }
 
 // AppendWarning appends the warning to the warning handler.
