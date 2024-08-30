@@ -107,6 +107,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/dbterror"
 	"github.com/pingcap/tidb/pkg/util/dbterror/plannererrors"
 	"github.com/pingcap/tidb/pkg/util/execdetails"
+	"github.com/pingcap/tidb/pkg/util/gopool"
 	"github.com/pingcap/tidb/pkg/util/intest"
 	"github.com/pingcap/tidb/pkg/util/logutil"
 	"github.com/pingcap/tidb/pkg/util/logutil/consistency"
@@ -184,6 +185,8 @@ type session struct {
 
 	sessionVars    *variable.SessionVars
 	sessionManager util.SessionManager
+
+	pool gopool.Pool
 
 	pctx    *planContextImpl
 	exprctx *contextsession.SessionExprContext
@@ -2567,6 +2570,7 @@ func (s *session) Close() {
 	if s.sessionPlanCache != nil {
 		s.sessionPlanCache.Close()
 	}
+	s.pool.Close()
 }
 
 // GetSessionVars implements the context.Context interface.
@@ -2606,6 +2610,7 @@ func (s *session) GetDistSQLCtx() *distsqlctx.DistSQLContext {
 			KVVars:                 vars.KVVars,
 			KvExecCounter:          sc.KvExecCounter,
 			SessionMemTracker:      vars.MemTracker,
+			Pool:                   s.pool,
 
 			Location:         sc.TimeZone(),
 			RuntimeStatsColl: sc.RuntimeStatsColl,
@@ -3739,6 +3744,7 @@ func createSessionWithOpt(store kv.Storage, opt *Opt) (*session, error) {
 	}
 	s := &session{
 		store:                 store,
+		pool:                  gopool.New(15 * time.Second),
 		ddlOwnerManager:       dom.DDL().OwnerManager(),
 		client:                store.GetClient(),
 		mppClient:             store.GetMPPClient(),
@@ -3803,6 +3809,7 @@ func detachStatsCollector(s *session) *session {
 func CreateSessionWithDomain(store kv.Storage, dom *domain.Domain) (*session, error) {
 	s := &session{
 		store:                 store,
+		pool:                  gopool.New(15 * time.Second),
 		sessionVars:           variable.NewSessionVars(nil),
 		client:                store.GetClient(),
 		mppClient:             store.GetMPPClient(),
