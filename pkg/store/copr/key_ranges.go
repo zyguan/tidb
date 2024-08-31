@@ -78,7 +78,38 @@ func (r *KeyRanges) At(i int) kv.KeyRange {
 }
 
 // Slice returns the sub ranges [from, to).
-func (r *KeyRanges) Slice(from, to int) *KeyRanges {
+func (r *KeyRanges) Slice(from, to int, allocator ...*keyRangesAllocator) *KeyRanges {
+	var ran *KeyRanges
+	if len(allocator) > 0 && allocator[0] != nil {
+		ran = allocator[0].Alloc()
+	} else {
+		ran = new(KeyRanges)
+	}
+	if r.first != nil {
+		if from == 0 && to > 0 {
+			ran.first = r.first
+		}
+		if from > 0 {
+			from--
+		}
+		if to > 0 {
+			to--
+		}
+	}
+	if to <= len(r.mid) {
+		ran.mid = r.mid[from:to]
+	} else {
+		if from <= len(r.mid) {
+			ran.mid = r.mid[from:]
+		}
+		if from < to {
+			ran.last = r.last
+		}
+	}
+	return ran
+}
+
+func (r *KeyRanges) SliceSelf(from, to int) {
 	var ran KeyRanges
 	if r.first != nil {
 		if from == 0 && to > 0 {
@@ -101,7 +132,7 @@ func (r *KeyRanges) Slice(from, to int) *KeyRanges {
 			ran.last = r.last
 		}
 	}
-	return &ran
+	*r = ran
 }
 
 // Do applies a functions to all ranges.
@@ -155,4 +186,26 @@ func (r *KeyRanges) ToPBRanges() []*coprocessor.KeyRange {
 		ranges = append(ranges, (*coprocessor.KeyRange)(unsafe.Pointer(ran)))
 	})
 	return ranges
+}
+
+type keyRangesAllocator struct {
+	data []KeyRanges
+	idx  int
+	cap  int
+}
+
+func (a *keyRangesAllocator) Alloc() (r *KeyRanges) {
+	if a.data == nil || a.idx == a.cap {
+		a.data = make([]KeyRanges, a.cap)
+		a.idx = 0
+	}
+	r = &a.data[a.idx]
+	a.idx++
+	return
+}
+
+func (a *keyRangesAllocator) Copy(r *KeyRanges) *KeyRanges {
+	out := a.Alloc()
+	*out = *r
+	return out
 }

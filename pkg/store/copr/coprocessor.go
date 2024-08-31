@@ -347,9 +347,16 @@ func buildCopTasks(bo *Backoffer, ranges *KeyRanges, opt *buildCopTaskOpt) ([]*c
 		chanSize = 18
 	}
 
+	taskCount := 0
+	for _, loc := range locs {
+		taskCount += loc.Ranges.Len()
+	}
+	taskData := make([]copTask, taskCount)
+	taskIdx := 0
+
 	var builder taskBuilder
 	if req.StoreBatchSize > 0 && hints != nil {
-		builder = newBatchTaskBuilder(bo, req, cache, req.ReplicaRead)
+		builder = newBatchTaskBuilder(bo, req, cache, req.ReplicaRead, taskCount)
 	} else {
 		builder = newLegacyTaskBuilder(len(locs))
 	}
@@ -388,7 +395,14 @@ func buildCopTasks(bo *Backoffer, ranges *KeyRanges, opt *buildCopTaskOpt) ([]*c
 					hint += hints[nextOrigRangeIdx]
 				}
 			}
-			task := &copTask{
+			var task *copTask
+			if taskIdx < len(taskData) {
+				task = &taskData[taskIdx]
+				taskIdx++
+			} else {
+				task = new(copTask)
+			}
+			*task = copTask{
 				region:        loc.Location.Region,
 				bucketsVer:    loc.getBucketVersion(),
 				ranges:        loc.Ranges.Slice(i, nextI),
@@ -491,18 +505,60 @@ type batchStoreTaskBuilder struct {
 	store2Idx   map[storeReplicaKey]int
 	tasks       []*copTask
 	replicaRead kv.ReplicaReadType
+
+	batchedTaskData []batchedCopTask
+	batchedTaskIdx  int
 }
 
-func newBatchTaskBuilder(bo *Backoffer, req *kv.Request, cache *RegionCache, replicaRead kv.ReplicaReadType) *batchStoreTaskBuilder {
+func newBatchTaskBuilder(bo *Backoffer, req *kv.Request, cache *RegionCache, replicaRead kv.ReplicaReadType, taskCount int) *batchStoreTaskBuilder {
+	var data []batchedCopTask
+	if taskCount > 0 {
+		data = make([]batchedCopTask, taskCount)
+		epoch := make([]metapb.RegionEpoch, taskCount)
+		for i := range data {
+			data[i].region.RegionEpoch = &epoch[i]
+		}
+	}
 	return &batchStoreTaskBuilder{
-		bo:          bo,
-		req:         req,
-		cache:       cache,
-		taskID:      0,
-		limit:       req.StoreBatchSize,
-		store2Idx:   make(map[storeReplicaKey]int, 16),
-		tasks:       make([]*copTask, 0, 16),
-		replicaRead: replicaRead,
+		bo:              bo,
+		req:             req,
+		cache:           cache,
+		taskID:          0,
+		limit:           req.StoreBatchSize,
+		store2Idx:       make(map[storeReplicaKey]int, 16),
+		tasks:           make([]*copTask, 0, 16),
+		replicaRead:     replicaRead,
+		batchedTaskData: data,
+	}
+}
+
+func (b *batchStoreTaskBuilder) newBatchedCopTask(task *copTask, rpcContext *tikv.RPCContext, loadBasedRetry bool) *batchedCopTask {
+	if b.batchedTaskIdx < len(b.batchedTaskData) {
+		t := &b.batchedTaskData[b.batchedTaskIdx]
+		t.task = task
+		t.region.RegionId = rpcContext.Region.GetID()
+		t.region.RegionEpoch.ConfVer = rpcContext.Region.GetConfVer()
+		t.region.RegionEpoch.Version = rpcContext.Region.GetVer()
+		t.region.Ranges = task.ranges.ToPBRanges()
+		t.storeID = rpcContext.Store.StoreID()
+		t.peer = rpcContext.Peer
+		t.loadBasedReplicaRetry = loadBasedRetry
+		b.batchedTaskIdx++
+		return t
+	}
+	return &batchedCopTask{
+		task: task,
+		region: coprocessor.RegionInfo{
+			RegionId: rpcContext.Region.GetID(),
+			RegionEpoch: &metapb.RegionEpoch{
+				ConfVer: rpcContext.Region.GetConfVer(),
+				Version: rpcContext.Region.GetVer(),
+			},
+			Ranges: task.ranges.ToPBRanges(),
+		},
+		storeID:               rpcContext.Store.StoreID(),
+		peer:                  rpcContext.Peer,
+		loadBasedReplicaRetry: loadBasedRetry,
 	}
 }
 
@@ -520,7 +576,7 @@ func (b *batchStoreTaskBuilder) handle(task *copTask) (err error) {
 	if b.limit <= 0 || !isSmallTask(task) {
 		return nil
 	}
-	batchedTask, err := b.cache.BuildBatchTask(b.bo, b.req, task, b.replicaRead)
+	batchedTask, err := b.cache.BuildBatchTask(b.bo, b.req, task, b.replicaRead, b.newBatchedCopTask)
 	if err != nil {
 		return err
 	}
@@ -1640,7 +1696,7 @@ func (worker *copIteratorWorker) handleBatchCopResponse(bo *Backoffer, rpcCtx *t
 			return nil, errors.New("store batched coprocessor with server is busy error shouldn't contain responses")
 		}
 		busyThresholdFallback = true
-		handler := newBatchTaskBuilder(bo, worker.req, worker.store.GetRegionCache(), kv.ReplicaReadFollower)
+		handler := newBatchTaskBuilder(bo, worker.req, worker.store.GetRegionCache(), kv.ReplicaReadFollower, len(remainTasks))
 		for _, task := range remainTasks {
 			// do not set busy threshold again.
 			task.busyThreshold = 0
