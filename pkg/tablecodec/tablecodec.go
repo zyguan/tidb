@@ -91,7 +91,7 @@ func MetaPrefix() []byte {
 // EncodeRowKey encodes the table id and record handle into a kv.Key
 func EncodeRowKey(tableID int64, encodedHandle []byte) kv.Key {
 	buf := make([]byte, 0, prefixLen+len(encodedHandle))
-	buf = appendTableRecordPrefix(buf, tableID)
+	buf = AppendTableRecordPrefix(buf, tableID)
 	buf = append(buf, encodedHandle...)
 	return buf
 }
@@ -1026,8 +1026,8 @@ func EncodeTablePrefix(tableID int64) kv.Key {
 	return key
 }
 
-// appendTableRecordPrefix appends table record prefix  "t[tableID]_r".
-func appendTableRecordPrefix(buf []byte, tableID int64) []byte {
+// AppendTableRecordPrefix appends table record prefix  "t[tableID]_r".
+func AppendTableRecordPrefix(buf []byte, tableID int64) []byte {
 	buf = append(buf, tablePrefix...)
 	buf = codec.EncodeInt(buf, tableID)
 	buf = append(buf, recordPrefixSep...)
@@ -1045,7 +1045,7 @@ func appendTableIndexPrefix(buf []byte, tableID int64) []byte {
 // GenTableRecordPrefix composes record prefix with tableID: "t[tableID]_r".
 func GenTableRecordPrefix(tableID int64) kv.Key {
 	buf := make([]byte, 0, len(tablePrefix)+8+len(recordPrefixSep))
-	return appendTableRecordPrefix(buf, tableID)
+	return AppendTableRecordPrefix(buf, tableID)
 }
 
 // GenTableIndexPrefix composes index prefix with tableID: "t[tableID]_i".

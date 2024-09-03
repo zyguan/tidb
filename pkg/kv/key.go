@@ -67,6 +67,24 @@ func (k Key) PrefixNext() Key {
 	return buf
 }
 
+func (k Key) PrefixNextInPlace() bool {
+	var i int
+	for i = len(k) - 1; i >= 0; i-- {
+		k[i]++
+		if k[i] != 0 {
+			break
+		}
+	}
+	if i == -1 {
+		// revert the key
+		for i := 0; i < len(k); i++ {
+			k[i]--
+		}
+		return false
+	}
+	return true
+}
+
 // Cmp returns the comparison result of two key.
 // The result will be 0 if a==b, -1 if a < b, and +1 if a > b.
 func (k Key) Cmp(another Key) int {
@@ -171,6 +189,8 @@ type Handle interface {
 	Compare(h Handle) int
 	// Encoded returns the encoded bytes.
 	Encoded() []byte
+	// Append appends encoded bytes to target buffer.
+	Append([]byte) []byte
 	// Len returns the length of the encoded bytes.
 	Len() int
 	// NumCols returns the number of columns of the handle,
@@ -240,6 +260,11 @@ func (ih IntHandle) Compare(h Handle) int {
 // Encoded implements the Handle interface.
 func (ih IntHandle) Encoded() []byte {
 	return codec.EncodeInt(nil, int64(ih))
+}
+
+// Append implements the Handle interface.
+func (ih IntHandle) Append(buf []byte) []byte {
+	return codec.EncodeInt(buf, int64(ih))
 }
 
 // Len implements the Handle interface.
@@ -360,6 +385,11 @@ func (ch *CommonHandle) Compare(h Handle) int {
 // Encoded implements the Handle interface.
 func (ch *CommonHandle) Encoded() []byte {
 	return ch.encoded
+}
+
+// Append implements the Handle interface.
+func (ch *CommonHandle) Append(buf []byte) []byte {
+	return append(ch.encoded, ch.Encoded()...)
 }
 
 // Len implements the Handle interface.

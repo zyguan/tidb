@@ -576,11 +576,41 @@ func SplitRangesAcrossInt64Boundary(ranges []*ranger.Range, keepOrder bool, desc
 	return signedRanges, unsignedRanges
 }
 
+type keyData struct {
+	buf []byte
+	idx int
+}
+
+func (d *keyData) allocKey(tid int64, handle kv.Handle, next bool) kv.Key {
+	d.idx = len(d.buf)
+	d.buf = tablecodec.AppendTableRecordPrefix(d.buf, tid)
+	hbase := len(d.buf)
+	d.buf = handle.Append(d.buf)
+	if next {
+		if !handle.IsInt() || !kv.Key(d.buf[hbase:]).PrefixNextInPlace() {
+			d.buf = append(d.buf, 0)
+		}
+	}
+	return kv.Key(d.buf[d.idx:])
+}
+
+func (d *keyData) allocPointKeyRange(tid int64, handle kv.Handle) kv.KeyRange {
+	key := d.allocKey(tid, handle, true)
+	return kv.KeyRange{StartKey: key[:len(key)-1], EndKey: key}
+}
+
+func (d *keyData) allocKeyRange(tid int64, startHandle, endHandle kv.Handle) kv.KeyRange {
+	startKey := d.allocKey(tid, startHandle, false)
+	endKey := d.allocKey(tid, endHandle, true)
+	return kv.KeyRange{StartKey: startKey, EndKey: endKey}
+}
+
 // TableHandlesToKVRanges converts sorted handle to kv ranges.
 // For continuous handles, we should merge them to a single key range.
 func TableHandlesToKVRanges(tid int64, handles []kv.Handle) ([]kv.KeyRange, []int) {
 	krs := make([]kv.KeyRange, 0, len(handles))
 	hints := make([]int, 0, len(handles))
+	data := keyData{buf: make([]byte, 0, len(handles)*(2*tablecodec.RecordRowKeyLen+1))}
 	i := 0
 	for i < len(handles) {
 		var isCommonHandle bool
@@ -592,10 +622,7 @@ func TableHandlesToKVRanges(tid int64, handles []kv.Handle) ([]kv.KeyRange, []in
 			commonHandle, isCommonHandle = handles[i].(*kv.CommonHandle)
 		}
 		if isCommonHandle {
-			ran := kv.KeyRange{
-				StartKey: tablecodec.EncodeRowKey(tid, commonHandle.Encoded()),
-				EndKey:   tablecodec.EncodeRowKey(tid, kv.Key(commonHandle.Encoded()).Next()),
-			}
+			ran := data.allocPointKeyRange(tid, commonHandle)
 			krs = append(krs, ran)
 			hints = append(hints, 1)
 			i++
@@ -610,12 +637,7 @@ func TableHandlesToKVRanges(tid int64, handles []kv.Handle) ([]kv.KeyRange, []in
 				break
 			}
 		}
-		low := codec.EncodeInt(nil, handles[i].IntValue())
-		high := codec.EncodeInt(nil, handles[j-1].IntValue())
-		high = kv.Key(high).PrefixNext()
-		startKey := tablecodec.EncodeRowKey(tid, low)
-		endKey := tablecodec.EncodeRowKey(tid, high)
-		krs = append(krs, kv.KeyRange{StartKey: startKey, EndKey: endKey})
+		krs = append(krs, data.allocKeyRange(tid, handles[i], handles[j-1]))
 		hints = append(hints, j-i)
 		i = j
 	}
