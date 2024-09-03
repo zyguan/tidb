@@ -470,7 +470,7 @@ func buildBatchCopTasksForNonPartitionedTable(
 	ctx context.Context,
 	bo *backoff.Backoffer,
 	store *kvStore,
-	ranges *KeyRanges,
+	ranges KeyRanges,
 	storeType kv.StoreType,
 	isMPP bool,
 	ttl time.Duration,
@@ -481,18 +481,18 @@ func buildBatchCopTasksForNonPartitionedTable(
 	appendWarning func(error)) ([]*batchCopTask, error) {
 	if config.GetGlobalConfig().DisaggregatedTiFlash {
 		if config.GetGlobalConfig().UseAutoScaler {
-			return buildBatchCopTasksConsistentHash(ctx, bo, store, []*KeyRanges{ranges}, storeType, ttl, dispatchPolicy)
+			return buildBatchCopTasksConsistentHash(ctx, bo, store, []KeyRanges{ranges}, storeType, ttl, dispatchPolicy)
 		}
-		return buildBatchCopTasksConsistentHashForPD(bo, store, []*KeyRanges{ranges}, storeType, ttl, dispatchPolicy)
+		return buildBatchCopTasksConsistentHashForPD(bo, store, []KeyRanges{ranges}, storeType, ttl, dispatchPolicy)
 	}
-	return buildBatchCopTasksCore(bo, store, []*KeyRanges{ranges}, storeType, isMPP, ttl, balanceWithContinuity, balanceContinuousRegionCount, tiflashReplicaReadPolicy, appendWarning)
+	return buildBatchCopTasksCore(bo, store, []KeyRanges{ranges}, storeType, isMPP, ttl, balanceWithContinuity, balanceContinuousRegionCount, tiflashReplicaReadPolicy, appendWarning)
 }
 
 func buildBatchCopTasksForPartitionedTable(
 	ctx context.Context,
 	bo *backoff.Backoffer,
 	store *kvStore,
-	rangesForEachPhysicalTable []*KeyRanges,
+	rangesForEachPhysicalTable []KeyRanges,
 	storeType kv.StoreType,
 	isMPP bool,
 	ttl time.Duration,
@@ -614,7 +614,7 @@ func buildBatchCopTasksConsistentHash(
 	ctx context.Context,
 	bo *backoff.Backoffer,
 	kvStore *kvStore,
-	rangesForEachPhysicalTable []*KeyRanges,
+	rangesForEachPhysicalTable []KeyRanges,
 	storeType kv.StoreType,
 	ttl time.Duration,
 	dispatchPolicy tiflashcompute.DispatchPolicy) (res []*batchCopTask, err error) {
@@ -912,7 +912,7 @@ type aliveStoresBundle struct {
 // When `partitionIDs != nil`, it means that buildBatchCopTasksCore is constructing a batch cop tasks for PartitionTableScan.
 // At this time, `len(rangesForEachPhysicalTable) == len(partitionIDs)` and `rangesForEachPhysicalTable[i]` is for partition `partitionIDs[i]`.
 // Otherwise, `rangesForEachPhysicalTable[0]` indicates the range for the single physical table.
-func buildBatchCopTasksCore(bo *backoff.Backoffer, store *kvStore, rangesForEachPhysicalTable []*KeyRanges, storeType kv.StoreType, isMPP bool, ttl time.Duration, balanceWithContinuity bool, balanceContinuousRegionCount int64, tiflashReplicaReadPolicy tiflash.ReplicaRead, appendWarning func(error)) ([]*batchCopTask, error) {
+func buildBatchCopTasksCore(bo *backoff.Backoffer, store *kvStore, rangesForEachPhysicalTable []KeyRanges, storeType kv.StoreType, isMPP bool, ttl time.Duration, balanceWithContinuity bool, balanceContinuousRegionCount int64, tiflashReplicaReadPolicy tiflash.ReplicaRead, appendWarning func(error)) ([]*batchCopTask, error) {
 	cache := store.GetRegionCache()
 	start := time.Now()
 	const cmdType = tikvrpc.CmdBatchCop
@@ -1111,7 +1111,7 @@ func (c *CopClient) sendBatch(ctx context.Context, req *kv.Request, vars *tikv.V
 	var err error
 	if req.PartitionIDAndRanges != nil {
 		// For Partition Table Scan
-		keyRanges := make([]*KeyRanges, 0, len(req.PartitionIDAndRanges))
+		keyRanges := make([]KeyRanges, 0, len(req.PartitionIDAndRanges))
 		partitionIDs := make([]int64, 0, len(req.PartitionIDAndRanges))
 		for _, pi := range req.PartitionIDAndRanges {
 			keyRanges = append(keyRanges, NewKeyRanges(pi.KeyRanges))
@@ -1285,7 +1285,7 @@ func (b *batchCopIterator) retryBatchCopTask(ctx context.Context, bo *backoff.Ba
 		return ret, err
 	}
 	// Retry Partition Table Scan
-	keyRanges := make([]*KeyRanges, 0, len(batchTask.PartitionTableRegions))
+	keyRanges := make([]KeyRanges, 0, len(batchTask.PartitionTableRegions))
 	pid := make([]int64, 0, len(batchTask.PartitionTableRegions))
 	for _, trs := range batchTask.PartitionTableRegions {
 		pid = append(pid, trs.PhysicalTableId)
@@ -1458,7 +1458,7 @@ func (b *batchCopIterator) handleCollectExecutionInfo(bo *Backoffer, resp *batch
 // Only called when UseAutoScaler is false.
 func buildBatchCopTasksConsistentHashForPD(bo *backoff.Backoffer,
 	kvStore *kvStore,
-	rangesForEachPhysicalTable []*KeyRanges,
+	rangesForEachPhysicalTable []KeyRanges,
 	storeType kv.StoreType,
 	ttl time.Duration,
 	dispatchPolicy tiflashcompute.DispatchPolicy) (res []*batchCopTask, err error) {

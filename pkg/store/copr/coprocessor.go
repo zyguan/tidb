@@ -238,7 +238,7 @@ type copTask struct {
 	taskID     uint64
 	region     tikv.RegionVerID
 	bucketsVer uint64
-	ranges     *KeyRanges
+	ranges     KeyRanges
 
 	respChan  chan *copResponse
 	storeAddr string
@@ -312,7 +312,7 @@ type buildCopTaskOpt struct {
 	ignoreTiKVClientReadTimeout bool
 }
 
-func buildCopTasks(bo *Backoffer, ranges *KeyRanges, opt *buildCopTaskOpt) ([]*copTask, error) {
+func buildCopTasks(bo *Backoffer, ranges KeyRanges, opt *buildCopTaskOpt) ([]*copTask, error) {
 	req, cache, eventCb, hints := opt.req, opt.cache, opt.eventCb, opt.rowHints
 	start := time.Now()
 	defer tracing.StartRegion(bo.GetCtx(), "copr.buildCopTasks").End()
@@ -568,7 +568,7 @@ func (b *batchStoreTaskBuilder) build() []*copTask {
 	return b.tasks
 }
 
-func buildTiDBMemCopTasks(ranges *KeyRanges, req *kv.Request) ([]*copTask, error) {
+func buildTiDBMemCopTasks(ranges KeyRanges, req *kv.Request) ([]*copTask, error) {
 	servers, err := infosync.GetAllServerInfo(context.Background())
 	if err != nil {
 		return nil, err
@@ -1480,7 +1480,7 @@ func (worker *copIteratorWorker) handleCopResponse(bo *Backoffer, rpcCtx *tikv.R
 	// When the request is using paging API, the `Range` is not nil.
 	if resp.pbResp.Range != nil {
 		resp.startKey = resp.pbResp.Range.Start
-	} else if task.ranges != nil && task.ranges.Len() > 0 {
+	} else if task.ranges.Len() > 0 {
 		resp.startKey = task.ranges.At(0).StartKey
 	}
 	worker.handleCollectExecutionInfo(bo, rpcCtx, resp)
@@ -1908,7 +1908,7 @@ func (worker *copIteratorWorker) handleTiDBSendReqErr(err error, task *copTask, 
 // split:      [s1   -->   s2)
 // In normal scan order, all data before s1 is consumed, so the retry ranges should be [s1 --> r2) [r3 --> r4)
 // In reverse scan order, all data after s2 is consumed, so the retry ranges should be [r1 --> r2) [r3 --> s2)
-func (worker *copIteratorWorker) calculateRetry(ranges *KeyRanges, split *coprocessor.KeyRange, desc bool) *KeyRanges {
+func (worker *copIteratorWorker) calculateRetry(ranges KeyRanges, split *coprocessor.KeyRange, desc bool) KeyRanges {
 	if split == nil {
 		return ranges
 	}
@@ -1926,7 +1926,7 @@ func (worker *copIteratorWorker) calculateRetry(ranges *KeyRanges, split *coproc
 // split:      [s1   -->   s2)
 // In normal scan order, all data before s2 is consumed, so the remained ranges should be [s2 --> r4)
 // In reverse scan order, all data after s1 is consumed, so the remained ranges should be [r1 --> s1)
-func (worker *copIteratorWorker) calculateRemain(ranges *KeyRanges, split *coprocessor.KeyRange, desc bool) *KeyRanges {
+func (worker *copIteratorWorker) calculateRemain(ranges KeyRanges, split *coprocessor.KeyRange, desc bool) KeyRanges {
 	if split == nil {
 		return ranges
 	}

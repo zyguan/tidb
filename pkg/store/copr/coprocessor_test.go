@@ -28,7 +28,7 @@ import (
 	"github.com/tikv/client-go/v2/tikv"
 )
 
-func buildTestCopTasks(bo *Backoffer, cache *RegionCache, ranges *KeyRanges, req *kv.Request, eventCb trxevents.EventCallback) ([]*copTask, error) {
+func buildTestCopTasks(bo *Backoffer, cache *RegionCache, ranges KeyRanges, req *kv.Request, eventCb trxevents.EventCallback) ([]*copTask, error) {
 	return buildCopTasks(bo, ranges, &buildCopTaskOpt{
 		req:      req,
 		cache:    cache,
@@ -559,7 +559,7 @@ func TestRebuild(t *testing.T) {
 	taskEqual(t, tasks[0], regionIDs[2], 0, "q", "z")
 }
 
-func buildCopRanges(keys ...string) *KeyRanges {
+func buildCopRanges(keys ...string) KeyRanges {
 	return NewKeyRanges(BuildKeyRanges(keys...))
 }
 
@@ -651,7 +651,7 @@ func toCopRange(r kv.KeyRange) *coprocessor.KeyRange {
 	return &coprRange
 }
 
-func toRange(r *KeyRanges) []kv.KeyRange {
+func toRange(r KeyRanges) []kv.KeyRange {
 	ranges := make([]kv.KeyRange, 0, r.Len())
 	if r.first != nil {
 		ranges = append(ranges, *r.first)

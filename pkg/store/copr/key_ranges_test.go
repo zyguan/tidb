@@ -28,10 +28,10 @@ func TestCopRanges(t *testing.T) {
 		{StartKey: []byte("e"), EndKey: []byte("f")},
 	}
 
-	checkEqual(t, &KeyRanges{mid: ranges}, ranges, true)
-	checkEqual(t, &KeyRanges{first: &ranges[0], mid: ranges[1:]}, ranges, true)
-	checkEqual(t, &KeyRanges{mid: ranges[:2], last: &ranges[2]}, ranges, true)
-	checkEqual(t, &KeyRanges{first: &ranges[0], mid: ranges[1:2], last: &ranges[2]}, ranges, true)
+	checkEqual(t, KeyRanges{mid: ranges}, ranges, true)
+	checkEqual(t, KeyRanges{first: &ranges[0], mid: ranges[1:]}, ranges, true)
+	checkEqual(t, KeyRanges{mid: ranges[:2], last: &ranges[2]}, ranges, true)
+	checkEqual(t, KeyRanges{first: &ranges[0], mid: ranges[1:2], last: &ranges[2]}, ranges, true)
 }
 
 func TestCopRangeSplit(t *testing.T) {
@@ -94,7 +94,7 @@ func TestCopRangeSplit(t *testing.T) {
 	)
 }
 
-func checkEqual(t *testing.T, copRanges *KeyRanges, ranges []kv.KeyRange, slice bool) {
+func checkEqual(t *testing.T, copRanges KeyRanges, ranges []kv.KeyRange, slice bool) {
 	require.Equal(t, copRanges.Len(), len(ranges))
 	for i := range ranges {
 		require.EqualValues(t, copRanges.At(i), ranges[i])
@@ -110,7 +110,7 @@ func checkEqual(t *testing.T, copRanges *KeyRanges, ranges []kv.KeyRange, slice 
 
 type splitCase struct {
 	key string
-	*KeyRanges
+	KeyRanges
 }
 
 func testSplit(t *testing.T, ranges *KeyRanges, checkLeft bool, cases ...splitCase) {

@@ -28,13 +28,13 @@ import (
 // It's for avoiding alloc big slice during build copTask.
 type KeyRanges struct {
 	first *kv.KeyRange
-	mid   []kv.KeyRange
 	last  *kv.KeyRange
+	mid   []kv.KeyRange
 }
 
 // NewKeyRanges constructs a KeyRanges instance.
-func NewKeyRanges(ranges []kv.KeyRange) *KeyRanges {
-	return &KeyRanges{mid: ranges}
+func NewKeyRanges(ranges []kv.KeyRange) KeyRanges {
+	return KeyRanges{mid: ranges}
 }
 
 func (r *KeyRanges) String() string {
@@ -78,7 +78,7 @@ func (r *KeyRanges) At(i int) kv.KeyRange {
 }
 
 // Slice returns the sub ranges [from, to).
-func (r *KeyRanges) Slice(from, to int) *KeyRanges {
+func (r *KeyRanges) Slice(from, to int) KeyRanges {
 	var ran KeyRanges
 	if r.first != nil {
 		if from == 0 && to > 0 {
@@ -101,7 +101,7 @@ func (r *KeyRanges) Slice(from, to int) *KeyRanges {
 			ran.last = r.last
 		}
 	}
-	return &ran
+	return ran
 }
 
 // Do applies a functions to all ranges.
@@ -118,7 +118,7 @@ func (r *KeyRanges) Do(f func(ran *kv.KeyRange)) {
 }
 
 // Split ranges into (left, right) by key.
-func (r *KeyRanges) Split(key []byte) (*KeyRanges, *KeyRanges) {
+func (r *KeyRanges) Split(key []byte) (KeyRanges, KeyRanges) {
 	n := sort.Search(r.Len(), func(i int) bool {
 		cur := r.At(i)
 		return len(cur.EndKey) == 0 || bytes.Compare(cur.EndKey, key) > 0

@@ -33,7 +33,7 @@ import (
 type RegionInfo struct {
 	Region         tikv.RegionVerID
 	Meta           *metapb.Region
-	Ranges         *KeyRanges
+	Ranges         KeyRanges
 	AllStores      []uint64
 	PartitionIndex int64 // used by PartitionTableScan, indicates the n-th partition of the partition table
 }

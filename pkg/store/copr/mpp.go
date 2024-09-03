@@ -64,7 +64,7 @@ func (c *MPPClient) ConstructMPPTasks(ctx context.Context, req *kv.MPPBuildTasks
 	var tasks []*batchCopTask
 	var err error
 	if req.PartitionIDAndRanges != nil {
-		rangesForEachPartition := make([]*KeyRanges, len(req.PartitionIDAndRanges))
+		rangesForEachPartition := make([]KeyRanges, len(req.PartitionIDAndRanges))
 		partitionIDs := make([]int64, len(req.PartitionIDAndRanges))
 		for i, p := range req.PartitionIDAndRanges {
 			rangesForEachPartition[i] = NewKeyRanges(p.KeyRanges)
