@@ -210,7 +210,7 @@ func (c *RegionCache) SplitKeyRangesByLocations(bo *Backoffer, ranges KeyRanges,
 			return nil, err
 		}
 
-		loc := locs[nextLocIndex]
+		loc := &locs[nextLocIndex]
 		// For the last loc.
 		if nextLocIndex == (len(locs) - 1) {
 			res = append(res, LocationKeyRanges{Location: loc, Ranges: ranges})
