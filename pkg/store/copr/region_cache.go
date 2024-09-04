@@ -21,8 +21,6 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/kvproto/pkg/coprocessor"
-	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/kv"
 	derr "github.com/pingcap/tidb/pkg/store/driver/error"
@@ -271,12 +269,8 @@ func (c *RegionCache) OnSendFailForBatchRegions(bo *Backoffer, store *tikv.Store
 	}
 }
 
-// BuildBatchTask fetches store and peer info for cop task, wrap it as `batchedCopTask`.
-func (c *RegionCache) BuildBatchTask(bo *Backoffer, req *kv.Request, task *copTask, replicaRead kv.ReplicaReadType) (*batchedCopTask, error) {
-	var (
-		rpcContext *tikv.RPCContext
-		err        error
-	)
+// BuildRPCContext fetches store and peer info for cop task, wrap it as `batchedCopTask`.
+func (c *RegionCache) BuildRPCContext(bo *Backoffer, req *kv.Request, task *copTask, replicaRead kv.ReplicaReadType) (rpcContext *tikv.RPCContext, err error) {
 	if replicaRead == kv.ReplicaReadFollower {
 		followerStoreSeed := uint32(0)
 		leastEstWaitTime := time.Duration(math.MaxInt64)
@@ -320,22 +314,5 @@ func (c *RegionCache) BuildBatchTask(bo *Backoffer, req *kv.Request, task *copTa
 		}
 	}
 
-	// fallback to non-batch path
-	if rpcContext == nil {
-		return nil, nil
-	}
-	return &batchedCopTask{
-		task: task,
-		region: coprocessor.RegionInfo{
-			RegionId: rpcContext.Region.GetID(),
-			RegionEpoch: &metapb.RegionEpoch{
-				ConfVer: rpcContext.Region.GetConfVer(),
-				Version: rpcContext.Region.GetVer(),
-			},
-			Ranges: task.ranges.ToPBRanges(),
-		},
-		storeID:               rpcContext.Store.StoreID(),
-		peer:                  rpcContext.Peer,
-		loadBasedReplicaRetry: replicaRead != kv.ReplicaReadLeader,
-	}, nil
+	return
 }

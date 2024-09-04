@@ -156,3 +156,8 @@ func (r *KeyRanges) ToPBRanges() []*coprocessor.KeyRange {
 	})
 	return ranges
 }
+
+func (r *KeyRanges) appendPBRanges(buf []*coprocessor.KeyRange) []*coprocessor.KeyRange {
+	r.Do(func(ran *kv.KeyRange) { buf = append(buf, (*coprocessor.KeyRange)(unsafe.Pointer(ran))) })
+	return buf
+}
