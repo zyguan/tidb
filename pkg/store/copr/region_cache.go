@@ -270,30 +270,35 @@ func (c *RegionCache) OnSendFailForBatchRegions(bo *Backoffer, store *tikv.Store
 }
 
 // BuildRPCContext fetches store and peer info for cop task, wrap it as `batchedCopTask`.
-func (c *RegionCache) BuildRPCContext(bo *Backoffer, req *kv.Request, task *copTask, replicaRead kv.ReplicaReadType) (rpcContext *tikv.RPCContext, err error) {
+func (c *RegionCache) BuildRPCContext(bo *Backoffer, req *kv.Request, task *copTask, replicaRead kv.ReplicaReadType) (rpcContext tikv.RPCContext, err error) {
 	if replicaRead == kv.ReplicaReadFollower {
 		followerStoreSeed := uint32(0)
 		leastEstWaitTime := time.Duration(math.MaxInt64)
 		var (
 			firstFollowerPeer *uint64
-			followerContext   *tikv.RPCContext
+			followerContext   tikv.RPCContext
 		)
 		for {
-			followerContext, err = c.GetTiKVRPCContext(bo.TiKVBackoffer(), task.region, options.GetTiKVReplicaReadType(replicaRead), followerStoreSeed)
+			followerContext, err = c.BuildTiKVRPCContext(bo.TiKVBackoffer(), task.region, options.GetTiKVReplicaReadType(replicaRead), followerStoreSeed)
 			if err != nil {
-				return nil, err
+				return
+			}
+			if followerContext.ClusterID == 0 {
+				followerStoreSeed++
+				continue
 			}
 			if firstFollowerPeer == nil {
-				firstFollowerPeer = &rpcContext.Peer.Id
-			} else if *firstFollowerPeer == rpcContext.Peer.Id {
+				firstFollowerPeer = &followerContext.Peer.Id
+			} else if *firstFollowerPeer == followerContext.Peer.Id {
 				break
 			}
 			estWaitTime := followerContext.Store.EstimatedWaitTime()
-			// the wait time of this follower is under given threshold, choose it.
 			if estWaitTime > req.StoreBusyThreshold {
+				// the wait time of this follower is out of given threshold, skip it.
+				followerStoreSeed++
 				continue
 			}
-			if rpcContext == nil {
+			if rpcContext.ClusterID == 0 {
 				rpcContext = followerContext
 			} else if estWaitTime < leastEstWaitTime {
 				leastEstWaitTime = estWaitTime
@@ -302,16 +307,13 @@ func (c *RegionCache) BuildRPCContext(bo *Backoffer, req *kv.Request, task *copT
 			followerStoreSeed++
 		}
 		// all replicas are busy, fallback to leader.
-		if rpcContext == nil {
+		if rpcContext.ClusterID == 0 {
 			replicaRead = kv.ReplicaReadLeader
 		}
 	}
 
 	if replicaRead == kv.ReplicaReadLeader {
-		rpcContext, err = c.GetTiKVRPCContext(bo.TiKVBackoffer(), task.region, options.GetTiKVReplicaReadType(replicaRead), 0)
-		if err != nil {
-			return nil, err
-		}
+		rpcContext, err = c.BuildTiKVRPCContext(bo.TiKVBackoffer(), task.region, options.GetTiKVReplicaReadType(replicaRead), 0)
 	}
 
 	return

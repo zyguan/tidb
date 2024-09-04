@@ -522,7 +522,7 @@ func newBatchTaskBuilder(bo *Backoffer, req *kv.Request, cache *RegionCache, rep
 	}
 }
 
-func (b *batchStoreTaskBuilder) newBatchedCopTask(task *copTask, rpcContext *tikv.RPCContext) *batchedCopTask {
+func (b *batchStoreTaskBuilder) newBatchedCopTask(task *copTask, rpcContext tikv.RPCContext) *batchedCopTask {
 	if b.batchIdx >= len(b.batchData) {
 		return &batchedCopTask{
 			task: task,
@@ -575,7 +575,7 @@ func (b *batchStoreTaskBuilder) handle(task *copTask) (err error) {
 	if err != nil {
 		return err
 	}
-	if rpcContext == nil {
+	if rpcContext.ClusterID == 0 {
 		// fallback to non-batch task.
 		return nil
 	}
