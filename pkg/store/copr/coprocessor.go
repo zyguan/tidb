@@ -1412,19 +1412,13 @@ func (worker *copIteratorWorker) logTimeCopTask(costTime time.Duration, task *co
 		logStr += fmt.Sprintf(" region_err:%s", regionErr.String())
 	}
 	// resp might be nil, but it is safe to call resp.GetXXX here.
-	detailV2 := resp.GetExecDetailsV2()
-	detail := resp.GetExecDetails()
-	var timeDetail *kvrpcpb.TimeDetail
-	if detailV2 != nil && detailV2.TimeDetail != nil {
-		timeDetail = detailV2.TimeDetail
-	} else if detail != nil && detail.TimeDetail != nil {
-		timeDetail = detail.TimeDetail
-	}
-	if timeDetail != nil {
-		logStr += fmt.Sprintf(" kv_process_ms:%d", timeDetail.ProcessWallTimeMs)
-		logStr += fmt.Sprintf(" kv_wait_ms:%d", timeDetail.WaitWallTimeMs)
-		logStr += fmt.Sprintf(" kv_read_ms:%d", timeDetail.KvReadWallTimeMs)
-		if timeDetail.ProcessWallTimeMs <= minLogKVProcessTime {
+	detailV2 := resp.ExecDetailsV2.Details()
+	timeDetailV2 := detailV2.GetTimeDetailV2()
+	if timeDetailV2 != nil {
+		logStr += fmt.Sprintf(" kv_process_ms:%d", timeDetailV2.ProcessWallTimeNs/uint64(time.Millisecond))
+		logStr += fmt.Sprintf(" kv_wait_ms:%d", timeDetailV2.WaitWallTimeNs/uint64(time.Millisecond))
+		logStr += fmt.Sprintf(" kv_read_ms:%d", timeDetailV2.KvReadWallTimeNs/uint64(time.Millisecond))
+		if timeDetailV2.ProcessWallTimeNs <= minLogKVProcessTime*uint64(time.Millisecond) {
 			logStr = strings.Replace(logStr, "TIME_COP_PROCESS", "TIME_COP_WAIT", 1)
 		}
 	}
@@ -1437,10 +1431,6 @@ func (worker *copIteratorWorker) logTimeCopTask(costTime time.Duration, task *co
 		logStr += fmt.Sprintf(" rocksdb_cache_hit_count:%d", detailV2.ScanDetailV2.RocksdbBlockCacheHitCount)
 		logStr += fmt.Sprintf(" rocksdb_read_count:%d", detailV2.ScanDetailV2.RocksdbBlockReadCount)
 		logStr += fmt.Sprintf(" rocksdb_read_byte:%d", detailV2.ScanDetailV2.RocksdbBlockReadByte)
-	} else if detail != nil && detail.ScanDetail != nil {
-		logStr = appendScanDetail(logStr, "write", detail.ScanDetail.Write)
-		logStr = appendScanDetail(logStr, "data", detail.ScanDetail.Data)
-		logStr = appendScanDetail(logStr, "lock", detail.ScanDetail.Lock)
 	}
 	logutil.Logger(bo.GetCtx()).Info(logStr)
 }
@@ -1891,23 +1881,13 @@ func (worker *copIteratorWorker) collectCopRuntimeStats(copStats *CopRuntimeStat
 	}
 	sd := &util.ScanDetail{}
 	td := util.TimeDetail{}
-	if pbDetails := resp.pbResp.ExecDetailsV2; pbDetails != nil {
+	if pbDetails := resp.pbResp.ExecDetailsV2.Details(); pbDetails != nil {
 		// Take values in `ExecDetailsV2` first.
-		if pbDetails.TimeDetail != nil || pbDetails.TimeDetailV2 != nil {
-			td.MergeFromTimeDetail(pbDetails.TimeDetailV2, pbDetails.TimeDetail)
+		if pbDetails.TimeDetailV2 != nil {
+			td.MergeFromTimeDetail(pbDetails.TimeDetailV2)
 		}
 		if scanDetailV2 := pbDetails.ScanDetailV2; scanDetailV2 != nil {
 			sd.MergeFromScanDetailV2(scanDetailV2)
-		}
-	} else if pbDetails := resp.pbResp.ExecDetails; pbDetails != nil {
-		if timeDetail := pbDetails.TimeDetail; timeDetail != nil {
-			td.MergeFromTimeDetail(nil, timeDetail)
-		}
-		if scanDetail := pbDetails.ScanDetail; scanDetail != nil {
-			if scanDetail.Write != nil {
-				sd.ProcessedKeys = scanDetail.Write.Processed
-				sd.TotalKeys = scanDetail.Write.Total
-			}
 		}
 	}
 	copStats.ScanDetail = sd

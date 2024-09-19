@@ -155,13 +155,16 @@ func handleCopDAGRequest(dbReader *dbreader.DBReader, lockStore *lockstore.MemSt
 				defer func() {
 					resp.CanBeCached = true
 					resp.CacheLastVersion = uint64(cacheVersion.(int))
-					if resp.ExecDetails == nil {
-						resp.ExecDetails = &kvrpcpb.ExecDetails{TimeDetail: &kvrpcpb.TimeDetail{ProcessWallTimeMs: 500}}
-					} else if resp.ExecDetails.TimeDetail == nil {
-						resp.ExecDetails.TimeDetail = &kvrpcpb.TimeDetail{ProcessWallTimeMs: 500}
+					processWallTime := uint64(500 * time.Millisecond)
+					execDetailsV2 := resp.ExecDetailsV2.Details()
+					if execDetailsV2 == nil {
+						execDetailsV2 = &kvrpcpb.ExecDetailsV2{TimeDetailV2: &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: processWallTime}}
+					} else if execDetailsV2.TimeDetailV2 == nil {
+						execDetailsV2.TimeDetailV2 = &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: processWallTime}
 					} else {
-						resp.ExecDetails.TimeDetail.ProcessWallTimeMs = 500
+						execDetailsV2.TimeDetailV2.ProcessWallTimeNs = processWallTime
 					}
+					resp.ExecDetailsV2.SetDetails(execDetailsV2)
 				}()
 			}
 		}
@@ -543,12 +546,9 @@ func genRespWithMPPExec(chunks []tipb.Chunk, lastRange *coprocessor.KeyRange, co
 			LockTtl:     locked.TTL,
 		}
 	}
-	resp.ExecDetails = &kvrpcpb.ExecDetails{
-		TimeDetail: &kvrpcpb.TimeDetail{ProcessWallTimeMs: uint64(dur / time.Millisecond)},
-	}
-	resp.ExecDetailsV2 = &kvrpcpb.ExecDetailsV2{
-		TimeDetail: resp.ExecDetails.TimeDetail,
-	}
+	resp.ExecDetailsV2.SetDetails(&kvrpcpb.ExecDetailsV2{
+		TimeDetailV2: &kvrpcpb.TimeDetailV2{ProcessWallTimeNs: uint64(dur)},
+	})
 	data, mErr := proto.Marshal(selResp)
 	if mErr != nil {
 		resp.OtherError = mErr.Error()
