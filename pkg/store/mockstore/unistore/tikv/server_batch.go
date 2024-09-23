@@ -29,7 +29,8 @@ type respIDPair struct {
 }
 
 func (p respIDPair) appendTo(batchResp *tikvpb.BatchCommandsResponse) {
-	batchResp.Responses = append(batchResp.Responses, p.resp)
+	data, _ := p.resp.Marshal()
+	batchResp.Responses = append(batchResp.Responses, data)
 	batchResp.RequestIds = append(batchResp.RequestIds, p.id)
 }
 

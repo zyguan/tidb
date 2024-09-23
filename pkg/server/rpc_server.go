@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/diagnosticspb"
 	"github.com/pingcap/kvproto/pkg/mpp"
+	"github.com/pingcap/kvproto/pkg/sharedbytes"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pingcap/sysutil"
 	"github.com/pingcap/tidb/pkg/config"
@@ -147,7 +148,7 @@ func (s *rpcServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 			return err
 		}
 
-		responses := make([]*tikvpb.BatchCommandsResponse_Response, 0, len(reqs.Requests))
+		responses := make([]sharedbytes.SharedBytes, 0, len(reqs.Requests))
 		for _, req := range reqs.Requests {
 			var response *tikvpb.BatchCommandsResponse_Response
 			switch request := req.Cmd.(type) {
@@ -178,7 +179,12 @@ func (s *rpcServer) BatchCommands(ss tikvpb.Tikv_BatchCommandsServer) error {
 					},
 				}
 			}
-			responses = append(responses, response)
+			data, err := response.Marshal()
+			if err != nil {
+				logutil.BgLogger().Error("RPC server batch commands encode fail", zap.Error(err))
+				return err
+			}
+			responses = append(responses, data)
 		}
 
 		err = ss.Send(&tikvpb.BatchCommandsResponse{

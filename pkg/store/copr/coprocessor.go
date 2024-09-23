@@ -1413,18 +1413,11 @@ func (worker *copIteratorWorker) logTimeCopTask(costTime time.Duration, task *co
 	}
 	// resp might be nil, but it is safe to call resp.GetXXX here.
 	detailV2 := resp.GetExecDetailsV2()
-	detail := resp.GetExecDetails()
-	var timeDetail *kvrpcpb.TimeDetail
-	if detailV2 != nil && detailV2.TimeDetail != nil {
-		timeDetail = detailV2.TimeDetail
-	} else if detail != nil && detail.TimeDetail != nil {
-		timeDetail = detail.TimeDetail
-	}
-	if timeDetail != nil {
-		logStr += fmt.Sprintf(" kv_process_ms:%d", timeDetail.ProcessWallTimeMs)
-		logStr += fmt.Sprintf(" kv_wait_ms:%d", timeDetail.WaitWallTimeMs)
-		logStr += fmt.Sprintf(" kv_read_ms:%d", timeDetail.KvReadWallTimeMs)
-		if timeDetail.ProcessWallTimeMs <= minLogKVProcessTime {
+	if detailV2 != nil && detailV2.TimeDetailV2 != nil {
+		logStr += fmt.Sprintf(" kv_process_ms:%d", detailV2.TimeDetailV2.ProcessWallTimeNs/1e6)
+		logStr += fmt.Sprintf(" kv_wait_ms:%d", detailV2.TimeDetailV2.WaitWallTimeNs/1e6)
+		logStr += fmt.Sprintf(" kv_read_ms:%d", detailV2.TimeDetailV2.KvReadWallTimeNs/1e6)
+		if detailV2.TimeDetailV2.ProcessWallTimeNs/1e6 <= minLogKVProcessTime {
 			logStr = strings.Replace(logStr, "TIME_COP_PROCESS", "TIME_COP_WAIT", 1)
 		}
 	}
@@ -1437,10 +1430,6 @@ func (worker *copIteratorWorker) logTimeCopTask(costTime time.Duration, task *co
 		logStr += fmt.Sprintf(" rocksdb_cache_hit_count:%d", detailV2.ScanDetailV2.RocksdbBlockCacheHitCount)
 		logStr += fmt.Sprintf(" rocksdb_read_count:%d", detailV2.ScanDetailV2.RocksdbBlockReadCount)
 		logStr += fmt.Sprintf(" rocksdb_read_byte:%d", detailV2.ScanDetailV2.RocksdbBlockReadByte)
-	} else if detail != nil && detail.ScanDetail != nil {
-		logStr = appendScanDetail(logStr, "write", detail.ScanDetail.Write)
-		logStr = appendScanDetail(logStr, "data", detail.ScanDetail.Data)
-		logStr = appendScanDetail(logStr, "lock", detail.ScanDetail.Lock)
 	}
 	logutil.Logger(bo.GetCtx()).Info(logStr)
 }
@@ -1605,9 +1594,28 @@ func (worker *copIteratorWorker) handleBatchCopResponse(bo *Backoffer, rpcCtx *t
 			Addr: rpcCtx.Addr,
 		}
 	}
-	batchResps := resp.GetBatchResponses()
-	for _, batchResp := range batchResps {
+	batchResps := resp.BatchResponses
+	// &CopRuntimeStats{ExecDetails: execdetails.ExecDetails{ScanDetail: &util.ScanDetail{}}}
+	data := make([]struct {
+		exec       kvrpcpb.ExecDetailsV2
+		time       kvrpcpb.TimeDetailV2
+		scan       kvrpcpb.ScanDetailV2
+		batchResp  coprocessor.StoreBatchTaskResponse
+		copResp    copResponse
+		pbResp     coprocessor.Response
+		copStats   CopRuntimeStats
+		scanDetail util.ScanDetail
+	}, len(batchResps))
+	for i, raw := range batchResps {
+		d := &data[i]
+		d.exec.TimeDetailV2 = &d.time
+		d.exec.ScanDetailV2 = &d.scan
+		d.batchResp.ExecDetailsV2 = &d.exec
+		if err := d.batchResp.Unmarshal(raw); err != nil {
+			return nil, errors.Trace(err)
+		}
 		var batchedTask *batchedCopTask
+		batchResp := &d.batchResp
 		taskID := batchResp.GetTaskId()
 		for i, t := range tasks {
 			if t != nil && t.task.taskID == taskID {
@@ -1619,12 +1627,12 @@ func (worker *copIteratorWorker) handleBatchCopResponse(bo *Backoffer, rpcCtx *t
 		if batchedTask == nil {
 			return nil, errors.Errorf("task id %d not found", batchResp.GetTaskId())
 		}
-		resp := &copResponse{
-			pbResp: &coprocessor.Response{
-				Data:          batchResp.Data,
-				ExecDetailsV2: batchResp.ExecDetailsV2,
-			},
-		}
+		resp := &d.copResp
+		resp.pbResp = &d.pbResp
+		resp.pbResp.ExecDetailsV2 = &d.exec
+		resp.detail = &d.copStats
+		resp.detail.ScanDetail = &d.scanDetail
+		resp.pbResp.Data = batchResp.Data
 		task := batchedTask.task
 		failpoint.Inject("batchCopRegionError", func() {
 			batchResp.RegionError = &errorpb.Error{}
@@ -1868,20 +1876,22 @@ func (worker *copIteratorWorker) handleCollectExecutionInfo(bo *Backoffer, rpcCt
 		}
 	})
 	if resp.detail == nil {
-		resp.detail = new(CopRuntimeStats)
+		resp.detail = &CopRuntimeStats{ExecDetails: execdetails.ExecDetails{ScanDetail: &util.ScanDetail{}}}
 	}
 	worker.collectCopRuntimeStats(resp.detail, bo, rpcCtx, resp)
 }
 
 func (worker *copIteratorWorker) collectCopRuntimeStats(copStats *CopRuntimeStats, bo *Backoffer, rpcCtx *tikv.RPCContext, resp *copResponse) {
 	copStats.ReqStats = worker.kvclient.Stats
-	backoffTimes := bo.GetBackoffTimes()
 	copStats.BackoffTime = time.Duration(bo.GetTotalSleep()) * time.Millisecond
-	copStats.BackoffSleep = make(map[string]time.Duration, len(backoffTimes))
-	copStats.BackoffTimes = make(map[string]int, len(backoffTimes))
-	for backoff := range backoffTimes {
-		copStats.BackoffTimes[backoff] = backoffTimes[backoff]
-		copStats.BackoffSleep[backoff] = time.Duration(bo.GetBackoffSleepMS()[backoff]) * time.Millisecond
+	backoffTimes := bo.GetBackoffTimes()
+	if len(backoffTimes) > 0 {
+		copStats.BackoffSleep = make(map[string]time.Duration, len(backoffTimes))
+		copStats.BackoffTimes = make(map[string]int, len(backoffTimes))
+		for backoff := range backoffTimes {
+			copStats.BackoffTimes[backoff] = backoffTimes[backoff]
+			copStats.BackoffSleep[backoff] = time.Duration(bo.GetBackoffSleepMS()[backoff]) * time.Millisecond
+		}
 	}
 	if rpcCtx != nil {
 		copStats.CalleeAddress = rpcCtx.Addr
@@ -1889,36 +1899,21 @@ func (worker *copIteratorWorker) collectCopRuntimeStats(copStats *CopRuntimeStat
 	if resp == nil {
 		return
 	}
-	sd := &util.ScanDetail{}
-	td := util.TimeDetail{}
 	if pbDetails := resp.pbResp.ExecDetailsV2; pbDetails != nil {
-		// Take values in `ExecDetailsV2` first.
-		if pbDetails.TimeDetail != nil || pbDetails.TimeDetailV2 != nil {
-			td.MergeFromTimeDetail(pbDetails.TimeDetailV2, pbDetails.TimeDetail)
+		if timeDetailV2 := pbDetails.TimeDetailV2; timeDetailV2 != nil {
+			copStats.TimeDetail.MergeFromTimeDetailV2(timeDetailV2)
 		}
 		if scanDetailV2 := pbDetails.ScanDetailV2; scanDetailV2 != nil {
-			sd.MergeFromScanDetailV2(scanDetailV2)
-		}
-	} else if pbDetails := resp.pbResp.ExecDetails; pbDetails != nil {
-		if timeDetail := pbDetails.TimeDetail; timeDetail != nil {
-			td.MergeFromTimeDetail(nil, timeDetail)
-		}
-		if scanDetail := pbDetails.ScanDetail; scanDetail != nil {
-			if scanDetail.Write != nil {
-				sd.ProcessedKeys = scanDetail.Write.Processed
-				sd.TotalKeys = scanDetail.Write.Total
-			}
+			copStats.ScanDetail.MergeFromScanDetailV2(scanDetailV2)
 		}
 	}
-	copStats.ScanDetail = sd
-	copStats.TimeDetail = td
 }
 
 func (worker *copIteratorWorker) collectUnconsumedCopRuntimeStats(bo *Backoffer, rpcCtx *tikv.RPCContext) {
 	if worker.kvclient.Stats == nil {
 		return
 	}
-	copStats := &CopRuntimeStats{}
+	copStats := &CopRuntimeStats{ExecDetails: execdetails.ExecDetails{ScanDetail: &util.ScanDetail{}}}
 	worker.collectCopRuntimeStats(copStats, bo, rpcCtx, nil)
 	worker.unconsumedStats.Lock()
 	worker.unconsumedStats.stats = append(worker.unconsumedStats.stats, copStats)

@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/kvproto/pkg/mpp"
+	"github.com/pingcap/kvproto/pkg/sharedbytes"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/kv"
@@ -610,7 +611,15 @@ func (svr *Server) Coprocessor(ctx context.Context, req *coprocessor.Request) (*
 		return &coprocessor.Response{RegionError: reqCtx.regErr}, nil
 	}
 	resp := cophandler.HandleCopRequest(reqCtx.getDBReader(), svr.mvccStore.lockStore, req)
-	resp.BatchResponses = svr.StoreBatchCoprocessor(ctx, req)
+	batchResps := svr.StoreBatchCoprocessor(ctx, req)
+	resp.BatchResponses = make([]sharedbytes.SharedBytes, len(batchResps))
+	for i, batchResp := range batchResps {
+		bytes, err := batchResp.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		resp.BatchResponses[i] = bytes
+	}
 	return resp, nil
 }
 
