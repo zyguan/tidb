@@ -187,6 +187,8 @@ type session struct {
 	sessionVars    *variable.SessionVars
 	sessionManager util.SessionManager
 
+	gopool *gopool
+
 	pctx    *planContextImpl
 	exprctx *sessionexpr.ExprContext
 	tblctx  *tblsession.MutateContext
@@ -2574,6 +2576,7 @@ func (s *session) Close() {
 	if s.sessionPlanCache != nil {
 		s.sessionPlanCache.Close()
 	}
+	s.gopool.Close()
 }
 
 // GetSessionVars implements the context.Context interface.
@@ -2603,6 +2606,8 @@ func (s *session) GetDistSQLCtx() *distsqlctx.DistSQLContext {
 
 	return sc.GetOrInitDistSQLFromCache(func() *distsqlctx.DistSQLContext {
 		return &distsqlctx.DistSQLContext{
+			GoPool: s.gopool,
+
 			WarnHandler:     sc.WarnHandler,
 			InRestrictedSQL: sc.InRestrictedSQL,
 			Client:          s.GetClient(),
@@ -3756,6 +3761,7 @@ func createSessionWithOpt(store kv.Storage, opt *Opt) (*session, error) {
 		mppClient:             store.GetMPPClient(),
 		stmtStats:             stmtstats.CreateStatementStats(),
 		sessionStatesHandlers: make(map[sessionstates.SessionStateType]sessionctx.SessionStatesHandler),
+		gopool:                newGoPool(defaultGoPoolMaxIdleTime),
 	}
 	s.sessionVars = variable.NewSessionVars(s)
 	s.exprctx = sessionexpr.NewExprContext(s)
@@ -3819,6 +3825,7 @@ func CreateSessionWithDomain(store kv.Storage, dom *domain.Domain) (*session, er
 		mppClient:             store.GetMPPClient(),
 		stmtStats:             stmtstats.CreateStatementStats(),
 		sessionStatesHandlers: make(map[sessionstates.SessionStateType]sessionctx.SessionStatesHandler),
+		gopool:                newGoPool(defaultGoPoolMaxIdleTime),
 	}
 	s.exprctx = sessionexpr.NewExprContext(s)
 	s.pctx = newPlanContextImpl(s)
@@ -4625,4 +4632,81 @@ func (s *session) GetCursorTracker() cursor.Tracker {
 // GetCommitWaitGroup returns the internal `sync.WaitGroup` for async commit and secondary key lock cleanup
 func (s *session) GetCommitWaitGroup() *sync.WaitGroup {
 	return &s.commitWaitGroup
+}
+
+const defaultGoPoolMaxIdleTime = 5 * time.Second
+
+// gopool likes https://github.com/tiancaiamao/gp/blob/main/gp.go but without capacity limit. We implement a gopool
+// (instead of using an existing open-source one), because we want to make sure that it's fully campatible with the
+// original go keyword (so that it can be a drop-in replacement for go keyword):
+//  1. `f` should always be executed when `Go(f)` gets called.
+//  2. `Go(f)` should never be blocked, otherwise the `Go(f)` may be blocked if we already use sync util (like WaitGroup) in `f`.
+type gopool struct {
+	tasks       chan func()
+	closed      chan struct{}
+	maxIdleTime time.Duration
+}
+
+// newGoPool creates a new goroutine pool.
+func newGoPool(maxIdleTime time.Duration) *gopool {
+	return &gopool{
+		tasks:       make(chan func()),
+		closed:      make(chan struct{}),
+		maxIdleTime: maxIdleTime,
+	}
+}
+
+// Go executes the function in a worker of the pool.
+func (p *gopool) Go(f func()) {
+	select {
+	case <-p.closed:
+		// if the pool is closed, use `go` directly to ensure `f` can be always executed.
+		go f()
+	case p.tasks <- f:
+		// run `f` in an existing worker.
+	default:
+		if p.maxIdleTime > 0 {
+			// start a new worker with idle recycle for running `f`.
+			go p.runloop(time.NewTimer(p.maxIdleTime), f)
+		} else {
+			// use `go` for immediately recycling when maxIdleTime <= 0.
+			go f()
+		}
+	}
+}
+
+// Close releases the worker goroutines in the Pool.
+func (p *gopool) Close() {
+	close(p.closed)
+}
+
+func (p *gopool) runloop(recycle *time.Timer, tasks ...func()) {
+	for _, f := range tasks {
+		f()
+	}
+	if recycle == nil {
+		for {
+			select {
+			case f := <-p.tasks:
+				f()
+			case <-p.closed:
+				return
+			}
+		}
+	} else {
+		for {
+			select {
+			case f := <-p.tasks:
+				f()
+				if !recycle.Stop() {
+					<-recycle.C
+				}
+				recycle.Reset(p.maxIdleTime)
+			case <-p.closed:
+				return
+			case <-recycle.C:
+				return
+			}
+		}
+	}
 }

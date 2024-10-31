@@ -310,6 +310,9 @@ type FairLockingController interface {
 	IsInFairLockingMode() bool
 }
 
+// GoPool is an interface that wraps the Go method which can be used in `Client.Send`.
+type GoPool interface{ Go(f func()) }
+
 // Client is used to send request to KV layer.
 type Client interface {
 	// Send sends request to KV layer, returns a Response.
@@ -321,6 +324,7 @@ type Client interface {
 
 // ClientSendOption wraps options during Client Send
 type ClientSendOption struct {
+	GoPool
 	SessionMemTracker          *memory.Tracker
 	EnabledRateLimitAction     bool
 	EventCb                    trxevents.EventCallback

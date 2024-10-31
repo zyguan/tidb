@@ -76,6 +76,7 @@ func Select(ctx context.Context, dctx *distsqlctx.DistSQLContext, kvReq *kv.Requ
 
 	ctx = WithSQLKvExecCounterInterceptor(ctx, dctx.KvExecCounter)
 	option := &kv.ClientSendOption{
+		GoPool:                     dctx.GoPool,
 		SessionMemTracker:          dctx.SessionMemTracker,
 		EnabledRateLimitAction:     enabledRateLimitAction,
 		EventCb:                    eventCb,

@@ -33,6 +33,8 @@ import (
 
 // DistSQLContext provides all information needed by using functions in `distsql`
 type DistSQLContext struct {
+	kv.GoPool
+
 	WarnHandler contextutil.WarnAppender
 
 	InRestrictedSQL bool
@@ -112,4 +114,14 @@ func (dctx *DistSQLContext) Detach() *DistSQLContext {
 	*newCtx.KVVars = *dctx.KVVars
 	newCtx.KVVars.Killed = &newCtx.SQLKiller.Signal
 	return &newCtx
+}
+
+// Go wraps the `Go` method of the `GoPool`, it handles the case when the `GoPool` is nil so that `dctx.Go` is always
+// safe to call.
+func (dctx *DistSQLContext) Go(f func()) {
+	if dctx != nil && dctx.GoPool != nil {
+		dctx.GoPool.Go(f)
+	} else {
+		go f()
+	}
 }

@@ -725,7 +725,7 @@ func (e *IndexLookUpExecutor) startIndexWorker(ctx context.Context, workCh chan<
 	tps := e.getRetTpsForIndexReader()
 	idxID := e.getIndexPlanRootID()
 	e.idxWorkerWg.Add(1)
-	go func() {
+	e.dctx.Go(func() {
 		defer trace.StartRegion(ctx, "IndexLookUpIndexWorker").End()
 		worker := &indexWorker{
 			idxLookup:       e,
@@ -808,7 +808,7 @@ func (e *IndexLookUpExecutor) startIndexWorker(ctx context.Context, workCh chan<
 		close(workCh)
 		close(e.resultCh)
 		e.idxWorkerWg.Done()
-	}()
+	})
 	return nil
 }
 
@@ -858,12 +858,12 @@ func (e *IndexLookUpExecutor) startTableWorker(ctx context.Context, workCh <-cha
 		}
 		worker.memTracker.AttachTo(e.memTracker)
 		ctx1, cancel := context.WithCancel(ctx)
-		go func() {
+		e.dctx.Go(func() {
 			defer trace.StartRegion(ctx1, "IndexLookUpTableWorker").End()
 			worker.pickAndExecTask(ctx1)
 			cancel()
 			e.tblWorkerWg.Done()
-		}()
+		})
 	}
 }
 

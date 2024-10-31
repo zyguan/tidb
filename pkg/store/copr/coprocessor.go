@@ -108,7 +108,7 @@ func (c *CopClient) Send(ctx context.Context, req *kv.Request, variables any, op
 	if sessionMemTracker != nil && enabledRateLimitAction {
 		sessionMemTracker.FallbackOldAndSetNewAction(it.actionOnExceed)
 	}
-	it.open(ctx, enabledRateLimitAction, option.EnableCollectExecutionInfo)
+	it.open(ctx, option)
 	return it
 }
 
@@ -708,6 +708,7 @@ type copIterator struct {
 
 // copIteratorWorker receives tasks from copIteratorTaskSender, handles tasks and sends the copResponse to respChan.
 type copIteratorWorker struct {
+	ctx      context.Context
 	taskCh   <-chan *copTask
 	wg       *sync.WaitGroup
 	store    *Store
@@ -738,6 +739,8 @@ type copIteratorTaskSender struct {
 	finishCh    <-chan struct{}
 	respChan    chan<- *copResponse
 	sendRate    *util.RateLimit
+	connID      uint64
+	checker     resourcegroup.RunawayChecker
 }
 
 type copResponse struct {
@@ -803,7 +806,7 @@ func init() {
 
 // run is a worker function that get a copTask from channel, handle it and
 // send the result back.
-func (worker *copIteratorWorker) run(ctx context.Context) {
+func (worker *copIteratorWorker) run() {
 	defer func() {
 		failpoint.Inject("ticase-4169", func(val failpoint.Value) {
 			if val.(bool) {
@@ -822,7 +825,7 @@ func (worker *copIteratorWorker) run(ctx context.Context) {
 		if respCh == nil {
 			respCh = task.respChan
 		}
-		worker.handleTask(ctx, task, respCh)
+		worker.handleTask(worker.ctx, task, respCh)
 		if worker.respChan != nil {
 			// When a task is finished by the worker, send a finCopResp into channel to notify the copIterator that
 			// there is a task finished.
@@ -839,7 +842,9 @@ func (worker *copIteratorWorker) run(ctx context.Context) {
 }
 
 // open starts workers and sender goroutines.
-func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableCollectExecutionInfo bool) {
+func (it *copIterator) open(ctx context.Context, option *kv.ClientSendOption) {
+	enabledRateLimitAction := option.EnabledRateLimitAction
+	enableCollectExecutionInfo := option.EnableCollectExecutionInfo
 	taskCh := make(chan *copTask, 1)
 	it.unconsumedStats = &unconsumedCopRuntimeStats{}
 	it.wg.Add(it.concurrency + it.smallTaskConcurrency)
@@ -854,6 +859,7 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 			ch = smallTaskCh
 		}
 		worker := &copIteratorWorker{
+			ctx:                        ctx,
 			taskCh:                     ch,
 			wg:                         &it.wg,
 			store:                      it.store,
@@ -870,7 +876,11 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 			storeBatchedFallbackNum:    &it.storeBatchedFallbackNum,
 			unconsumedStats:            it.unconsumedStats,
 		}
-		go worker.run(ctx)
+		if option.GoPool != nil {
+			option.GoPool.Go(worker.run)
+		} else {
+			go worker.run()
+		}
 	}
 	taskSender := &copIteratorTaskSender{
 		taskCh:      taskCh,
@@ -879,6 +889,8 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 		tasks:       it.tasks,
 		finishCh:    it.finishCh,
 		sendRate:    it.sendRate,
+		connID:      it.req.ConnID,
+		checker:     it.runawayChecker,
 	}
 	taskSender.respChan = it.respChan
 	it.actionOnExceed.setEnabled(enabledRateLimitAction)
@@ -888,10 +900,14 @@ func (it *copIterator) open(ctx context.Context, enabledRateLimitAction, enableC
 			it.memTracker.Consume(10 * MockResponseSizeForTest)
 		}
 	})
-	go taskSender.run(it.req.ConnID, it.req.RunawayChecker)
+	if option.GoPool != nil {
+		option.GoPool.Go(taskSender.run)
+	} else {
+		go taskSender.run()
+	}
 }
 
-func (sender *copIteratorTaskSender) run(connID uint64, checker resourcegroup.RunawayChecker) {
+func (sender *copIteratorTaskSender) run() {
 	// Send tasks to feed the worker goroutines.
 	for _, t := range sender.tasks {
 		// we control the sending rate to prevent all tasks
@@ -913,7 +929,7 @@ func (sender *copIteratorTaskSender) run(connID uint64, checker resourcegroup.Ru
 		if exit {
 			break
 		}
-		if connID > 0 {
+		if sender.connID > 0 {
 			failpoint.Inject("pauseCopIterTaskSender", func() {})
 		}
 	}
@@ -927,9 +943,9 @@ func (sender *copIteratorTaskSender) run(connID uint64, checker resourcegroup.Ru
 	if sender.respChan != nil {
 		close(sender.respChan)
 	}
-	if checker != nil {
+	if sender.checker != nil {
 		// runaway checker need to focus on the all processed keys of all tasks at a time.
-		checker.ResetTotalProcessedKeys()
+		sender.checker.ResetTotalProcessedKeys()
 	}
 }
 
