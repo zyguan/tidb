@@ -211,7 +211,7 @@ type cnfItemRangeResult struct {
 	minColNum          int
 }
 
-func getCNFItemRangeResult(sctx *rangerctx.RangerContext, rangeResult *DetachRangeResult, offset int) *cnfItemRangeResult {
+func getCNFItemRangeResult(sctx *rangerctx.RangerContext, rangeResult *DetachRangeResult, offset int) cnfItemRangeResult {
 	sameLenPointRanges := true
 	var maxColNum, minColNum int
 	for i, ran := range rangeResult.Ranges {
@@ -229,7 +229,7 @@ func getCNFItemRangeResult(sctx *rangerctx.RangerContext, rangeResult *DetachRan
 	if minColNum != maxColNum {
 		sameLenPointRanges = false
 	}
-	return &cnfItemRangeResult{
+	return cnfItemRangeResult{
 		rangeResult:        rangeResult,
 		offset:             offset,
 		sameLenPointRanges: sameLenPointRanges,
@@ -261,13 +261,13 @@ func compareCNFItemRangeResult(curResult, bestResult *cnfItemRangeResult) (curIs
 // - Result = intersection of the two ranges
 // - Try heuristic to pick which range is better if intersections fails or if feature is off.
 func mergeTwoCNFRanges(sctx *rangerctx.RangerContext, cond expression.Expression,
-	rangeResult, otherRangeResult *cnfItemRangeResult) *cnfItemRangeResult {
-	if rangeResult == nil {
+	rangeResult, otherRangeResult cnfItemRangeResult) cnfItemRangeResult {
+	if rangeResult.rangeResult == nil {
 		return otherRangeResult
 	}
 	tryHeuristic := false
 	mergedResult := rangeResult
-	if otherRangeResult != nil && mergedResult.rangeResult != nil {
+	if mergedResult.rangeResult != nil {
 		if fixcontrol.GetBoolWithDefault(sctx.OptimizerFixControl, fixcontrol.Fix54337, false) {
 			mergedResultIsSubset := mergedResult.rangeResult.Ranges.Subset(sctx.TypeCtx, otherRangeResult.rangeResult.Ranges)
 			// if mergedResult is a subset then do nothing
@@ -293,7 +293,7 @@ func mergeTwoCNFRanges(sctx *rangerctx.RangerContext, cond expression.Expression
 			tryHeuristic = true
 		}
 	}
-	if tryHeuristic && compareCNFItemRangeResult(otherRangeResult, mergedResult) {
+	if tryHeuristic && compareCNFItemRangeResult(&otherRangeResult, &mergedResult) {
 		mergedResult = otherRangeResult
 	}
 	return mergedResult
@@ -304,11 +304,11 @@ func mergeTwoCNFRanges(sctx *rangerctx.RangerContext, cond expression.Expression
 // e.g, for input CNF expressions ((a,b) in ((1,1),(2,2))) and a > 1 and ((a,b,c) in (1,1,1),(2,2,2))
 // ((a,b,c) in (1,1,1),(2,2,2)) would be extracted.
 func extractBestCNFItemRanges(sctx *rangerctx.RangerContext, conds []expression.Expression, cols []*expression.Column,
-	lengths []int, rangeMaxSize int64, convertToSortKey bool) (*cnfItemRangeResult, []*valueInfo, error) {
+	lengths []int, rangeMaxSize int64, convertToSortKey bool) (cnfItemRangeResult, []*valueInfo, error) {
+	var bestRes cnfItemRangeResult
 	if len(conds) < 2 {
-		return nil, nil, nil
+		return bestRes, nil, nil
 	}
-	var bestRes *cnfItemRangeResult
 	columnValues := make([]*valueInfo, len(cols))
 	for i, cond := range conds {
 		tmpConds := []expression.Expression{cond}
@@ -325,10 +325,10 @@ func extractBestCNFItemRanges(sctx *rangerctx.RangerContext, conds []expression.
 		// which are not point ranges, and we cannot append `c = 1` anymore.
 		res, err := detachCondAndBuildRange(sctx, tmpConds, cols, lengths, rangeMaxSize, convertToSortKey, false)
 		if err != nil {
-			return nil, nil, err
+			return bestRes, nil, err
 		}
 		if len(res.Ranges) == 0 {
-			return &cnfItemRangeResult{rangeResult: res, offset: i}, nil, nil
+			return cnfItemRangeResult{rangeResult: res, offset: i}, nil, nil
 		}
 		// take the union of the two columnValues
 		columnValues = unionColumnValues(columnValues, res.ColumnValues)
@@ -339,7 +339,7 @@ func extractBestCNFItemRanges(sctx *rangerctx.RangerContext, conds []expression.
 		bestRes = mergeTwoCNFRanges(sctx, cond, bestRes, curRes)
 	}
 
-	if bestRes != nil && bestRes.rangeResult != nil {
+	if bestRes.rangeResult != nil {
 		bestRes.rangeResult.IsDNFCond = false
 	}
 	return bestRes, columnValues, nil
@@ -443,7 +443,7 @@ func (d *rangeDetacher) detachCNFCondAndBuildRangeForIndex(conditions []expressi
 			return nil, err
 		}
 		res.ColumnValues = unionColumnValues(res.ColumnValues, columnValues)
-		if bestCNFItemRes != nil && bestCNFItemRes.rangeResult != nil {
+		if bestCNFItemRes.rangeResult != nil {
 			if len(bestCNFItemRes.rangeResult.Ranges) == 0 {
 				return &DetachRangeResult{}, nil
 			}
@@ -527,7 +527,7 @@ func (d *rangeDetacher) detachCNFCondAndBuildRangeForIndex(conditions []expressi
 		// Choosing between point ranges and bestCNF is needed since bestCNF does not cover the intersection
 		// of all conjuncts. Even when we add support for intersection, it could be turned off by a flag or it could be
 		// incomplete due to a long list of conjuncts.
-		if bestCNFItemRes != nil && res != nil && len(res.Ranges) != 0 {
+		if bestCNFItemRes.rangeResult != nil && res != nil && len(res.Ranges) != 0 {
 			bestCNFIsSubset := bestCNFItemRes.rangeResult.Ranges.Subset(d.sctx.TypeCtx, res.Ranges)
 			pointRangeIsSubset := res.Ranges.Subset(d.sctx.TypeCtx, bestCNFItemRes.rangeResult.Ranges)
 			// Pick bestCNFIsSubset if it is more selective than point ranges(res).
@@ -567,41 +567,41 @@ func (d *rangeDetacher) detachCNFCondAndBuildRangeForIndex(conditions []expressi
 // If return value is nil, it means p is unsatisfiable. For example, `(MaxUint64` is unsatisfiable.
 // The boundary value will be treated as the bigger type: For example, `(MaxInt64` of type KindInt64 will become `[MaxInt64+1` of type KindUint64,
 // and vice versa for `0)` of type KindUint64 will become `-1]` of type KindInt64.
-func excludeToIncludeForIntPoint(p *point) *point {
-	if !p.excl {
+func excludeToIncludeForIntPoint(p *Point) *Point {
+	if !p.Excl {
 		return p
 	}
-	if p.value.Kind() == types.KindInt64 {
-		val := p.value.GetInt64()
-		if p.start {
+	if p.Value.Kind() == types.KindInt64 {
+		val := p.Value.GetInt64()
+		if p.Start {
 			if val == math.MaxInt64 {
-				p.value.SetUint64(uint64(val + 1))
+				p.Value.SetUint64(uint64(val + 1))
 			} else {
-				p.value.SetInt64(val + 1)
+				p.Value.SetInt64(val + 1)
 			}
-			p.excl = false
+			p.Excl = false
 		} else {
 			if val == math.MinInt64 {
 				return nil
 			}
-			p.value.SetInt64(val - 1)
-			p.excl = false
+			p.Value.SetInt64(val - 1)
+			p.Excl = false
 		}
-	} else if p.value.Kind() == types.KindUint64 {
-		val := p.value.GetUint64()
-		if p.start {
+	} else if p.Value.Kind() == types.KindUint64 {
+		val := p.Value.GetUint64()
+		if p.Start {
 			if val == math.MaxUint64 {
 				return nil
 			}
-			p.value.SetUint64(val + 1)
-			p.excl = false
+			p.Value.SetUint64(val + 1)
+			p.Excl = false
 		} else {
 			if val == 0 {
-				p.value.SetInt64(int64(val - 1))
+				p.Value.SetInt64(int64(val - 1))
 			} else {
-				p.value.SetUint64(val - 1)
+				p.Value.SetUint64(val - 1)
 			}
-			p.excl = false
+			p.Excl = false
 		}
 	}
 	return p
@@ -609,7 +609,7 @@ func excludeToIncludeForIntPoint(p *point) *point {
 
 // If there exists an interval whose length is large than 0, return nil. Otherwise remove all unsatisfiable intervals
 // and return array of single point intervals.
-func allSinglePoints(typeCtx types.Context, points []*point) []*point {
+func allSinglePoints(typeCtx types.Context, points []*Point) []*Point {
 	pos := 0
 	for i := 0; i < len(points); i += 2 {
 		// Remove unsatisfiable interval. For example, (MaxInt64, +inf) and (-inf, MinInt64) is unsatisfiable.
@@ -622,11 +622,11 @@ func allSinglePoints(typeCtx types.Context, points []*point) []*point {
 			continue
 		}
 		// If interval is not a single point, just return nil.
-		if !left.start || right.start || left.excl || right.excl {
+		if !left.Start || right.Start || left.Excl || right.Excl {
 			return nil
 		}
 		// Since the point's collations are equal to the column's collation, we can use any of them.
-		cmp, err := left.value.Compare(typeCtx, &right.value, collate.GetCollator(left.value.Collation()))
+		cmp, err := left.Value.Compare(typeCtx, &right.Value, collate.GetCollator(left.Value.Collation()))
 		if err != nil || cmp != 0 {
 			return nil
 		}
@@ -696,9 +696,10 @@ func extractValueInfo(expr expression.Expression) *valueInfo {
 func ExtractEqAndInCondition(sctx *rangerctx.RangerContext, conditions []expression.Expression, cols []*expression.Column,
 	lengths []int) ([]expression.Expression, []expression.Expression, []expression.Expression, []*valueInfo, bool) {
 	var filters []expression.Expression
-	rb := builder{sctx: sctx}
+	rb := newBuilder(sctx)
+	defer rb.Reset(rb.Size())
 	accesses := make([]expression.Expression, len(cols))
-	points := make([][]*point, len(cols))
+	points := make([][]*Point, len(cols))
 	mergedAccesses := make([]expression.Expression, len(cols))
 	newConditions := make([]expression.Expression, 0, len(conditions))
 	columnValues := make([]*valueInfo, len(cols))
@@ -822,7 +823,8 @@ func (d *rangeDetacher) detachDNFCondAndBuildRangeForIndex(
 		optPrefixIndexSingleScan: d.sctx.OptPrefixIndexSingleScan,
 		ctx:                      d.sctx.ExprCtx.GetEvalCtx(),
 	}
-	rb := builder{sctx: d.sctx}
+	rb := newBuilder(d.sctx)
+	defer rb.Reset(rb.Size())
 	dnfItems := expression.FlattenDNFConditions(condition)
 	newAccessItems := make([]expression.Expression, 0, len(dnfItems))
 	minAccessConds := -1
@@ -896,7 +898,7 @@ func (d *rangeDetacher) detachDNFCondAndBuildRangeForIndex(
 				tmpNewTp = convertStringFTToBinaryCollate(tmpNewTp)
 			}
 			// TODO: restrict the mem usage of ranges
-			ranges, rangeFallback, err := points2Ranges(d.sctx, points, tmpNewTp, d.rangeMaxSize)
+			ranges, rangeFallback, err := points2Ranges(rb, points, tmpNewTp, d.rangeMaxSize)
 			if err != nil {
 				return nil, nil, nil, false, -1, errors.Trace(err)
 			}

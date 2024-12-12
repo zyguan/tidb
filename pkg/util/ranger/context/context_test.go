@@ -35,6 +35,7 @@ func TestContextDetach(t *testing.T) {
 		ExprCtx:                  exprstatic.NewExprContext(),
 		RangeFallbackHandler:     &rangeFallbackHandler,
 		PlanCacheTracker:         &planCacheTracker,
+		PointAllocator:           &PointAllocator{},
 		OptimizerFixControl:      map[uint64]string{1: "a"},
 		UseCache:                 true,
 		InPreparedPlanBuilding:   true,
@@ -49,7 +50,7 @@ func TestContextDetach(t *testing.T) {
 		"$.RangeFallbackHandler",
 		"$.PlanCacheTracker",
 	}
-	deeptest.AssertRecursivelyNotEqual(t, obj, &RangerContext{}, deeptest.WithIgnorePath(ignorePath))
+	deeptest.AssertRecursivelyNotEqual(t, obj, &RangerContext{PointAllocator: &PointAllocator{}}, deeptest.WithIgnorePath(ignorePath))
 
 	staticObj := obj.Detach(obj.ExprCtx)
 

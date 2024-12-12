@@ -294,6 +294,7 @@ func (c *Context) GetRangerCtx() *rangerctx.RangerContext {
 
 		PlanCacheTracker:     &c.GetSessionVars().StmtCtx.PlanCacheTracker,
 		RangeFallbackHandler: &c.GetSessionVars().StmtCtx.RangeFallbackHandler,
+		PointAllocator:       &rangerctx.PointAllocator{},
 	}
 }
 

@@ -38,31 +38,40 @@ import (
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tidb/pkg/util/collate"
 	rangerctx "github.com/pingcap/tidb/pkg/util/ranger/context"
+	"github.com/pingcap/tidb/pkg/util/zeropool"
 )
 
-func validInterval(ec errctx.Context, loc *time.Location, low, high *point) (bool, error) {
-	l, err := codec.EncodeKey(loc, nil, low.value)
+var keybufPool = zeropool.New(func() []byte { return make([]byte, 256) })
+
+func validInterval(buf []byte, ec errctx.Context, loc *time.Location, low, high *Point) ([]byte, bool, error) {
+	var err error
+	buf, err = codec.EncodeKey(loc, buf, low.Value)
 	err = ec.HandleError(err)
 	if err != nil {
-		return false, errors.Trace(err)
+		return buf, false, errors.Trace(err)
 	}
-	if low.excl {
-		l = kv.Key(l).PrefixNext()
+	if low.Excl {
+		if !kv.Key(buf).PrefixNextInPlace() {
+			buf = append(buf, 0)
+		}
 	}
-	r, err := codec.EncodeKey(loc, nil, high.value)
+	pos := len(buf)
+	buf, err = codec.EncodeKey(loc, buf, high.Value)
 	err = ec.HandleError(err)
 	if err != nil {
-		return false, errors.Trace(err)
+		return buf, false, errors.Trace(err)
 	}
-	if !high.excl {
-		r = kv.Key(r).PrefixNext()
+	if !high.Excl {
+		if !kv.Key(buf[pos:]).PrefixNextInPlace() {
+			buf = append(buf, 0)
+		}
 	}
-	return bytes.Compare(l, r) < 0, nil
+	return buf, bytes.Compare(buf[:pos], buf[pos:]) < 0, nil
 }
 
 // convertPoints does some preprocessing on rangePoints to make them ready to build ranges. Preprocessing includes converting
 // points to the specified type, validating intervals and skipping impossible intervals.
-func convertPoints(sctx *rangerctx.RangerContext, rangePoints []*point, newTp *types.FieldType, skipNull bool, tableRange bool) ([]*point, error) {
+func convertPoints(r *builder, rangePoints []*Point, newTp *types.FieldType, skipNull bool, tableRange bool) ([]*Point, error) {
 	i := 0
 	numPoints := len(rangePoints)
 	var minValueDatum, maxValueDatum types.Datum
@@ -77,33 +86,37 @@ func convertPoints(sctx *rangerctx.RangerContext, rangePoints []*point, newTp *t
 			maxValueDatum.SetInt64(math.MaxInt64)
 		}
 	}
+	buf := keybufPool.Get()
 	for j := 0; j < numPoints; j += 2 {
-		startPoint, err := convertPoint(sctx, rangePoints[j], newTp)
+		startPoint, err := convertPoint(r, rangePoints[j], newTp)
 		if err != nil {
+			keybufPool.Put(buf)
 			return nil, errors.Trace(err)
 		}
 		if tableRange {
-			if startPoint.value.Kind() == types.KindNull {
-				startPoint.value = minValueDatum
-				startPoint.excl = false
-			} else if startPoint.value.Kind() == types.KindMinNotNull {
-				startPoint.value = minValueDatum
+			if startPoint.Value.Kind() == types.KindNull {
+				startPoint.Value = minValueDatum
+				startPoint.Excl = false
+			} else if startPoint.Value.Kind() == types.KindMinNotNull {
+				startPoint.Value = minValueDatum
 			}
 		}
-		endPoint, err := convertPoint(sctx, rangePoints[j+1], newTp)
+		endPoint, err := convertPoint(r, rangePoints[j+1], newTp)
 		if err != nil {
+			keybufPool.Put(buf)
 			return nil, errors.Trace(err)
 		}
 		if tableRange {
-			if endPoint.value.Kind() == types.KindMaxValue {
-				endPoint.value = maxValueDatum
+			if endPoint.Value.Kind() == types.KindMaxValue {
+				endPoint.Value = maxValueDatum
 			}
 		}
-		if skipNull && endPoint.value.Kind() == types.KindNull {
+		if skipNull && endPoint.Value.Kind() == types.KindNull {
 			continue
 		}
-		less, err := validInterval(sctx.ErrCtx, sctx.TypeCtx.Location(), startPoint, endPoint)
+		buf, less, err := validInterval(buf[:0], r.ErrCtx, r.TypeCtx.Location(), startPoint, endPoint)
 		if err != nil {
+			keybufPool.Put(buf)
 			return nil, errors.Trace(err)
 		}
 		if !less {
@@ -113,21 +126,45 @@ func convertPoints(sctx *rangerctx.RangerContext, rangePoints []*point, newTp *t
 		rangePoints[i+1] = endPoint
 		i += 2
 	}
+	keybufPool.Put(buf)
 	return rangePoints[:i], nil
 }
 
 // estimateMemUsageForPoints2Ranges estimates the memory usage of ranges converted from points.
-func estimateMemUsageForPoints2Ranges(rangePoints []*point) int64 {
+func estimateMemUsageForPoints2Ranges(rangePoints []*Point) int64 {
 	// 16 is the size of Range.Collators
 	return (EmptyRangeSize+16)*int64(len(rangePoints))/2 + getPointsTotalDatumSize(rangePoints)
+}
+
+func buildRangesFromConvertedPoints(points []*Point, collator collate.Collator) Ranges {
+	collators := []collate.Collator{collator}
+	data := make([]struct {
+		l [1]types.Datum
+		h [1]types.Datum
+		r Range
+	}, len(points)/2)
+	ranges := make(Ranges, 0, len(points)/2)
+	for i := 0; i < len(points); i += 2 {
+		startPoint, endPoint, idx := points[i], points[i+1], i/2
+		data[idx].l[0], data[idx].h[0] = startPoint.Value, endPoint.Value
+		data[idx].r = Range{
+			LowVal:      data[idx].l[:],
+			LowExclude:  startPoint.Excl,
+			HighVal:     data[idx].h[:],
+			HighExclude: endPoint.Excl,
+			Collators:   collators,
+		}
+		ranges = append(ranges, &data[idx].r)
+	}
+	return ranges
 }
 
 // points2Ranges build index ranges from range points.
 // Only one column is built there. If there're multiple columns, use appendPoints2Ranges.
 // rangeMaxSize is the max memory limit for ranges. O indicates no memory limit.
 // If the second return value is true, it means that the estimated memory usage of ranges exceeds rangeMaxSize and it falls back to full range.
-func points2Ranges(sctx *rangerctx.RangerContext, rangePoints []*point, newTp *types.FieldType, rangeMaxSize int64) (Ranges, bool, error) {
-	convertedPoints, err := convertPoints(sctx, rangePoints, newTp, mysql.HasNotNullFlag(newTp.GetFlag()), false)
+func points2Ranges(r *builder, rangePoints []*Point, newTp *types.FieldType, rangeMaxSize int64) (Ranges, bool, error) {
+	convertedPoints, err := convertPoints(r, rangePoints, newTp, mysql.HasNotNullFlag(newTp.GetFlag()), false)
 	if err != nil {
 		return nil, false, errors.Trace(err)
 	}
@@ -141,31 +178,19 @@ func points2Ranges(sctx *rangerctx.RangerContext, rangePoints []*point, newTp *t
 		}
 		return fullRange, true, nil
 	}
-	ranges := make(Ranges, 0, len(convertedPoints)/2)
-	for i := 0; i < len(convertedPoints); i += 2 {
-		startPoint, endPoint := convertedPoints[i], convertedPoints[i+1]
-		ran := &Range{
-			LowVal:      []types.Datum{startPoint.value},
-			LowExclude:  startPoint.excl,
-			HighVal:     []types.Datum{endPoint.value},
-			HighExclude: endPoint.excl,
-			Collators:   []collate.Collator{collate.GetCollator(newTp.GetCollate())},
-		}
-		ranges = append(ranges, ran)
-	}
-	return ranges, false, nil
+	return buildRangesFromConvertedPoints(convertedPoints, collate.GetCollator(newTp.GetCollate())), false, nil
 }
 
-func convertPoint(sctx *rangerctx.RangerContext, point *point, newTp *types.FieldType) (*point, error) {
-	switch point.value.Kind() {
+func convertPoint(r *builder, point *Point, newTp *types.FieldType) (*Point, error) {
+	switch point.Value.Kind() {
 	case types.KindMaxValue, types.KindMinNotNull:
 		return point, nil
 	}
-	casted, err := point.value.ConvertTo(sctx.TypeCtx, newTp)
+	casted, err := point.Value.ConvertTo(r.TypeCtx, newTp)
 	if err != nil {
-		if sctx.InPreparedPlanBuilding {
+		if r.InPreparedPlanBuilding {
 			// skip plan cache in this case for safety.
-			sctx.SetSkipPlanCache(fmt.Sprintf("%s when converting %v", err.Error(), point.value))
+			r.SetSkipPlanCache(fmt.Sprintf("%s when converting %v", err.Error(), point.Value))
 		}
 		//revive:disable:empty-block
 		if newTp.GetType() == mysql.TypeYear && terror.ErrorEqual(err, types.ErrWarnDataOutOfRange) {
@@ -177,13 +202,13 @@ func convertPoint(sctx *rangerctx.RangerContext, point *point, newTp *types.Fiel
 			// A trimmed valid boundary point value would be returned then. Accordingly, the `excl` of the point
 			// would be adjusted. Impossible ranges would be skipped by the `validInterval` call later.
 			// tests in TestIndexRange/TestIndexRangeForDecimal
-		} else if point.value.Kind() == types.KindMysqlTime && newTp.GetType() == mysql.TypeTimestamp && terror.ErrorEqual(err, types.ErrWrongValue) {
+		} else if point.Value.Kind() == types.KindMysqlTime && newTp.GetType() == mysql.TypeTimestamp && terror.ErrorEqual(err, types.ErrWrongValue) {
 			// See issue #28424: query failed after add index
 			// Ignore conversion from Date[Time] to Timestamp since it must be either out of range or impossible date, which will not match a point select
 		} else if newTp.GetType() == mysql.TypeEnum && terror.ErrorEqual(err, types.ErrTruncated) {
 			// Ignore the types.ErrorTruncated when we convert TypeEnum values.
 			// We should cover Enum upper overflow, and convert to the biggest value.
-			if point.value.GetInt64() > 0 {
+			if point.Value.GetInt64() > 0 {
 				upperEnum, err := types.ParseEnumValue(newTp.GetElems(), uint64(len(newTp.GetElems())))
 				if err != nil {
 					return nil, err
@@ -200,36 +225,37 @@ func convertPoint(sctx *rangerctx.RangerContext, point *point, newTp *types.Fiel
 		}
 		//revive:enable:empty-block
 	}
-	valCmpCasted, err := point.value.Compare(sctx.TypeCtx, &casted, collate.GetCollator(newTp.GetCollate()))
+	valCmpCasted, err := point.Value.Compare(r.TypeCtx, &casted, collate.GetCollator(newTp.GetCollate()))
 	if err != nil {
 		return point, errors.Trace(err)
 	}
-	npoint := point.Clone(casted)
+	npoint := r.Allocate(*point)
+	npoint.Value = casted
 	if valCmpCasted == 0 {
 		return npoint, nil
 	}
-	if npoint.start {
-		if npoint.excl {
+	if npoint.Start {
+		if npoint.Excl {
 			if valCmpCasted < 0 {
 				// e.g. "a > 1.9" convert to "a >= 2".
-				npoint.excl = false
+				npoint.Excl = false
 			}
 		} else {
 			if valCmpCasted > 0 {
 				// e.g. "a >= 1.1 convert to "a > 1"
-				npoint.excl = true
+				npoint.Excl = true
 			}
 		}
 	} else {
-		if npoint.excl {
+		if npoint.Excl {
 			if valCmpCasted > 0 {
 				// e.g. "a < 1.1" convert to "a <= 1"
-				npoint.excl = false
+				npoint.Excl = false
 			}
 		} else {
 			if valCmpCasted < 0 {
 				// e.g. "a <= 1.9" convert to "a < 2"
-				npoint.excl = true
+				npoint.Excl = true
 			}
 		}
 	}
@@ -248,15 +274,15 @@ func getRangesTotalDatumSize(ranges Ranges) (sum int64) {
 	return
 }
 
-func getPointsTotalDatumSize(points []*point) (sum int64) {
+func getPointsTotalDatumSize(points []*Point) (sum int64) {
 	for _, pt := range points {
-		sum += pt.value.MemUsage()
+		sum += pt.Value.MemUsage()
 	}
 	return
 }
 
 // estimateMemUsageForAppendPoints2Ranges estimates the memory usage of results of appending points to ranges.
-func estimateMemUsageForAppendPoints2Ranges(origin Ranges, rangePoints []*point) int64 {
+func estimateMemUsageForAppendPoints2Ranges(origin Ranges, rangePoints []*Point) int64 {
 	if len(origin) == 0 || len(rangePoints) == 0 {
 		return 0
 	}
@@ -273,9 +299,9 @@ func estimateMemUsageForAppendPoints2Ranges(origin Ranges, rangePoints []*point)
 // rangeMaxSize is the max memory limit for ranges. O indicates no memory limit.
 // If the second return value is true, it means that the estimated memory usage of ranges after appending points exceeds
 // rangeMaxSize and the function rejects appending points to ranges.
-func appendPoints2Ranges(sctx *rangerctx.RangerContext, origin Ranges, rangePoints []*point,
+func appendPoints2Ranges(r *builder, origin Ranges, rangePoints []*Point,
 	newTp *types.FieldType, rangeMaxSize int64) (Ranges, bool, error) {
-	convertedPoints, err := convertPoints(sctx, rangePoints, newTp, false, false)
+	convertedPoints, err := convertPoints(r, rangePoints, newTp, false, false)
 	if err != nil {
 		return nil, false, errors.Trace(err)
 	}
@@ -286,7 +312,7 @@ func appendPoints2Ranges(sctx *rangerctx.RangerContext, origin Ranges, rangePoin
 	var newIndexRanges Ranges
 	for i := range origin {
 		oRange := origin[i]
-		if !oRange.IsPoint(sctx) {
+		if !oRange.IsPoint(r.RangerContext) {
 			newIndexRanges = append(newIndexRanges, oRange)
 		} else {
 			newRanges, err := appendPoints2IndexRange(oRange, convertedPoints, newTp)
@@ -299,18 +325,18 @@ func appendPoints2Ranges(sctx *rangerctx.RangerContext, origin Ranges, rangePoin
 	return newIndexRanges, false, nil
 }
 
-func appendPoints2IndexRange(origin *Range, rangePoints []*point, ft *types.FieldType) (Ranges, error) {
+func appendPoints2IndexRange(origin *Range, rangePoints []*Point, ft *types.FieldType) (Ranges, error) {
 	newRanges := make(Ranges, 0, len(rangePoints)/2)
 	for i := 0; i < len(rangePoints); i += 2 {
 		startPoint, endPoint := rangePoints[i], rangePoints[i+1]
 
 		lowVal := make([]types.Datum, len(origin.LowVal)+1)
 		copy(lowVal, origin.LowVal)
-		lowVal[len(origin.LowVal)] = startPoint.value
+		lowVal[len(origin.LowVal)] = startPoint.Value
 
 		highVal := make([]types.Datum, len(origin.HighVal)+1)
 		copy(highVal, origin.HighVal)
-		highVal[len(origin.HighVal)] = endPoint.value
+		highVal[len(origin.HighVal)] = endPoint.Value
 
 		collators := make([]collate.Collator, len(origin.Collators)+1)
 		copy(collators, origin.Collators)
@@ -318,9 +344,9 @@ func appendPoints2IndexRange(origin *Range, rangePoints []*point, ft *types.Fiel
 
 		ir := &Range{
 			LowVal:      lowVal,
-			LowExclude:  startPoint.excl,
+			LowExclude:  startPoint.Excl,
 			HighVal:     highVal,
-			HighExclude: endPoint.excl,
+			HighExclude: endPoint.Excl,
 			Collators:   collators,
 		}
 		newRanges = append(newRanges, ir)
@@ -386,27 +412,15 @@ func AppendRanges2PointRanges(pointRanges Ranges, ranges Ranges, rangeMaxSize in
 // It will remove the nil and convert MinNotNull and MaxValue to MinInt64 or MinUint64 and MaxInt64 or MaxUint64.
 // rangeMaxSize is the max memory limit for ranges. O indicates no memory limit.
 // If the second return value is true, it means that the estimated memory usage of ranges exceeds rangeMaxSize and it falls back to full range.
-func points2TableRanges(sctx *rangerctx.RangerContext, rangePoints []*point, newTp *types.FieldType, rangeMaxSize int64) (Ranges, bool, error) {
-	convertedPoints, err := convertPoints(sctx, rangePoints, newTp, true, true)
+func points2TableRanges(r *builder, rangePoints []*Point, newTp *types.FieldType, rangeMaxSize int64) (Ranges, bool, error) {
+	convertedPoints, err := convertPoints(r, rangePoints, newTp, true, true)
 	if err != nil {
 		return nil, false, errors.Trace(err)
 	}
 	if rangeMaxSize > 0 && estimateMemUsageForPoints2Ranges(convertedPoints) > rangeMaxSize {
 		return FullIntRange(mysql.HasUnsignedFlag(newTp.GetFlag())), true, nil
 	}
-	ranges := make(Ranges, 0, len(convertedPoints)/2)
-	for i := 0; i < len(convertedPoints); i += 2 {
-		startPoint, endPoint := convertedPoints[i], convertedPoints[i+1]
-		ran := &Range{
-			LowVal:      []types.Datum{startPoint.value},
-			LowExclude:  startPoint.excl,
-			HighVal:     []types.Datum{endPoint.value},
-			HighExclude: endPoint.excl,
-			Collators:   []collate.Collator{collate.GetCollator(newTp.GetCollate())},
-		}
-		ranges = append(ranges, ran)
-	}
-	return ranges, false, nil
+	return buildRangesFromConvertedPoints(convertedPoints, collate.GetCollator(newTp.GetCollate())), false, nil
 }
 
 // buildColumnRange builds range from CNF conditions.
@@ -414,9 +428,10 @@ func points2TableRanges(sctx *rangerctx.RangerContext, rangePoints []*point, new
 // The second return value is the conditions used to build ranges and the third return value is the remained conditions.
 func buildColumnRange(accessConditions []expression.Expression, sctx *rangerctx.RangerContext, tp *types.FieldType, tableRange bool,
 	colLen int, rangeMaxSize int64) (Ranges, []expression.Expression, []expression.Expression, error) {
-	rb := builder{sctx: sctx}
+	rb := newBuilder(sctx)
+	defer rb.Reset(rb.Size())
 	newTp := newFieldType(tp)
-	rangePoints := getFullRange()
+	rangePoints := rb.getFullRange()
 	for _, cond := range accessConditions {
 		collator := collate.GetCollator(charset.CollationBin)
 		rangePoints = rb.intersection(rangePoints, rb.build(cond, newTp, colLen, true), collator)
@@ -431,9 +446,9 @@ func buildColumnRange(accessConditions []expression.Expression, sctx *rangerctx.
 	)
 	newTp = convertStringFTToBinaryCollate(newTp)
 	if tableRange {
-		ranges, rangeFallback, err = points2TableRanges(sctx, rangePoints, newTp, rangeMaxSize)
+		ranges, rangeFallback, err = points2TableRanges(rb, rangePoints, newTp, rangeMaxSize)
 	} else {
-		ranges, rangeFallback, err = points2Ranges(sctx, rangePoints, newTp, rangeMaxSize)
+		ranges, rangeFallback, err = points2Ranges(rb, rangePoints, newTp, rangeMaxSize)
 	}
 	if err != nil {
 		return nil, nil, nil, errors.Trace(err)
@@ -478,7 +493,8 @@ func BuildColumnRange(conds []expression.Expression, sctx *rangerctx.RangerConte
 
 func (d *rangeDetacher) buildRangeOnColsByCNFCond(newTp []*types.FieldType, eqAndInCount int,
 	accessConds []expression.Expression) (Ranges, []expression.Expression, []expression.Expression, error) {
-	rb := builder{sctx: d.sctx}
+	rb := newBuilder(d.sctx)
+	defer rb.Reset(rb.Size())
 	var (
 		ranges        Ranges
 		rangeFallback bool
@@ -495,9 +511,9 @@ func (d *rangeDetacher) buildRangeOnColsByCNFCond(newTp []*types.FieldType, eqAn
 			tmpNewTp = convertStringFTToBinaryCollate(tmpNewTp)
 		}
 		if i == 0 {
-			ranges, rangeFallback, err = points2Ranges(d.sctx, point, tmpNewTp, d.rangeMaxSize)
+			ranges, rangeFallback, err = points2Ranges(rb, point, tmpNewTp, d.rangeMaxSize)
 		} else {
-			ranges, rangeFallback, err = appendPoints2Ranges(d.sctx, ranges, point, tmpNewTp, d.rangeMaxSize)
+			ranges, rangeFallback, err = appendPoints2Ranges(rb, ranges, point, tmpNewTp, d.rangeMaxSize)
 		}
 		if err != nil {
 			return nil, nil, nil, errors.Trace(err)
@@ -507,7 +523,7 @@ func (d *rangeDetacher) buildRangeOnColsByCNFCond(newTp []*types.FieldType, eqAn
 			return ranges, accessConds[:i], accessConds[i:], nil
 		}
 	}
-	rangePoints := getFullRange()
+	rangePoints := rb.getFullRange()
 	// Build rangePoints for non-equal access conditions.
 	for i := eqAndInCount; i < len(accessConds); i++ {
 		collator := collate.GetCollator(newTp[eqAndInCount].GetCollate())
@@ -528,9 +544,9 @@ func (d *rangeDetacher) buildRangeOnColsByCNFCond(newTp []*types.FieldType, eqAn
 		}
 	}
 	if eqAndInCount == 0 {
-		ranges, rangeFallback, err = points2Ranges(d.sctx, rangePoints, tmpNewTp, d.rangeMaxSize)
+		ranges, rangeFallback, err = points2Ranges(rb, rangePoints, tmpNewTp, d.rangeMaxSize)
 	} else if eqAndInCount < len(accessConds) {
-		ranges, rangeFallback, err = appendPoints2Ranges(d.sctx, ranges, rangePoints, tmpNewTp, d.rangeMaxSize)
+		ranges, rangeFallback, err = appendPoints2Ranges(rb, ranges, rangePoints, tmpNewTp, d.rangeMaxSize)
 	}
 	if err != nil {
 		return nil, nil, nil, errors.Trace(err)
@@ -641,7 +657,7 @@ func hasPrefix(lengths []int) bool {
 // cutPrefixForPoints cuts the prefix of points according to the prefix length of the prefix index.
 // It may modify the point.value and point.excl. The modification is in-place.
 // This function doesn't require the start and end points to be paired in the input.
-func cutPrefixForPoints(points []*point, length int, tp *types.FieldType) {
+func cutPrefixForPoints(points []*Point, length int, tp *types.FieldType) {
 	if length == types.UnspecifiedLength {
 		return
 	}
@@ -649,15 +665,15 @@ func cutPrefixForPoints(points []*point, length int, tp *types.FieldType) {
 		if p == nil {
 			continue
 		}
-		cut := CutDatumByPrefixLen(&p.value, length, tp)
+		cut := CutDatumByPrefixLen(&p.Value, length, tp)
 		// In two cases, we need to convert the exclusive point to an inclusive point.
 		// case 1: we actually cut the value to accommodate the prefix index.
 		if cut ||
 			// case 2: the value is already equal to the prefix index.
 			// For example, col_varchar > 'xx' should be converted to range [xx, +inf) when the prefix index length of
 			// `col_varchar` is 2. Otherwise, we would miss values like 'xxx' if we execute (xx, +inf) index range scan.
-			(p.start && ReachPrefixLen(&p.value, length, tp)) {
-			p.excl = false
+			(p.Start && ReachPrefixLen(&p.Value, length, tp)) {
+			p.Excl = false
 		}
 	}
 }
@@ -729,7 +745,7 @@ func newFieldType(tp *types.FieldType) *types.FieldType {
 // 'points'. `col` is the target column to construct the Equal or In condition.
 // NOTE:
 // 1. 'points' should not be empty.
-func points2EqOrInCond(ctx expression.BuildContext, points []*point, col *expression.Column) expression.Expression {
+func points2EqOrInCond(ctx expression.BuildContext, points []*Point, col *expression.Column) expression.Expression {
 	// len(points) cannot be 0 here, since we impose early termination in ExtractEqAndInCondition
 	// Constant and Column args should have same RetType, simply get from first arg
 	retType := col.GetType(ctx.GetEvalCtx())
@@ -737,11 +753,11 @@ func points2EqOrInCond(ctx expression.BuildContext, points []*point, col *expres
 	args = append(args, col)
 	orArgs := make([]expression.Expression, 0, 2)
 	for i := 0; i < len(points); i = i + 2 {
-		if points[i].value.IsNull() {
+		if points[i].Value.IsNull() {
 			orArgs = append(orArgs, expression.NewFunctionInternal(ctx, ast.IsNull, retType, col))
 		} else {
 			value := &expression.Constant{
-				Value:   points[i].value,
+				Value:   points[i].Value,
 				RetType: retType,
 			}
 			args = append(args, value)

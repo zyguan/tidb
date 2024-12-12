@@ -17,6 +17,7 @@ package session
 import (
 	"github.com/pingcap/tidb/pkg/planner/planctx"
 	"github.com/pingcap/tidb/pkg/planner/plannersession"
+	rangerctx "github.com/pingcap/tidb/pkg/util/ranger/context"
 )
 
 var _ planctx.PlanContext = &planContextImpl{}
@@ -27,6 +28,8 @@ var _ planctx.PlanContext = &planContextImpl{}
 type planContextImpl struct {
 	*session
 	*plannersession.PlanCtxExtended
+
+	rangerctx.PointAllocator
 }
 
 // NewPlanContextImpl creates a new PlanContextImpl.
@@ -35,4 +38,10 @@ func newPlanContextImpl(s *session) *planContextImpl {
 		session:         s,
 		PlanCtxExtended: plannersession.NewPlanCtxExtended(s),
 	}
+}
+
+func (pc *planContextImpl) GetRangerCtx() *rangerctx.RangerContext {
+	rctx := pc.session.GetRangerCtx()
+	rctx.PointAllocator = &pc.PointAllocator
+	return rctx
 }

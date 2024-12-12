@@ -15,6 +15,8 @@
 package context
 
 import (
+	"fmt"
+
 	"github.com/pingcap/tidb/pkg/errctx"
 	"github.com/pingcap/tidb/pkg/expression/exprctx"
 	"github.com/pingcap/tidb/pkg/types"
@@ -28,6 +30,7 @@ type RangerContext struct {
 	ExprCtx exprctx.BuildContext
 	*contextutil.RangeFallbackHandler
 	*contextutil.PlanCacheTracker
+	*PointAllocator
 	OptimizerFixControl      map[uint64]string
 	UseCache                 bool
 	InPreparedPlanBuilding   bool
@@ -48,4 +51,54 @@ func (r *RangerContext) Detach(staticExprCtx exprctx.BuildContext) *RangerContex
 		newCtx.OptimizerFixControl[k] = v
 	}
 	return &newCtx
+}
+
+// PointAllocator is used to allocate points.
+type PointAllocator struct {
+	data []Point
+}
+
+// Allocate allocates a point.
+func (a *PointAllocator) Allocate(val Point) *Point {
+	a.data = append(a.data, val)
+	return &a.data[len(a.data)-1]
+}
+
+// Reset keeps n allocated points and releases others for reusing.
+func (a *PointAllocator) Reset(n int) {
+	a.data = a.data[:n]
+}
+
+// Size returns the size of the allocated points.
+func (a *PointAllocator) Size() int {
+	return len(a.data)
+}
+
+// Point is the end Point of range interval.
+type Point struct {
+	Value types.Datum
+	Excl  bool // exclude
+	Start bool
+}
+
+// String implements fmt.Stringer interface.
+func (p *Point) String() string {
+	val := p.Value.GetValue()
+	if p.Value.Kind() == types.KindMinNotNull {
+		val = "-inf"
+	} else if p.Value.Kind() == types.KindMaxValue {
+		val = "+inf"
+	}
+	if p.Start {
+		symbol := "["
+		if p.Excl {
+			symbol = "("
+		}
+		return fmt.Sprintf("%s%v", symbol, val)
+	}
+	symbol := "]"
+	if p.Excl {
+		symbol = ")"
+	}
+	return fmt.Sprintf("%v%s", val, symbol)
 }

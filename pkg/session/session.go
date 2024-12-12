@@ -2673,6 +2673,7 @@ func (s *session) GetRangerCtx() *rangerctx.RangerContext {
 
 			PlanCacheTracker:     &s.GetSessionVars().StmtCtx.PlanCacheTracker,
 			RangeFallbackHandler: &s.GetSessionVars().StmtCtx.RangeFallbackHandler,
+			PointAllocator:       &rangerctx.PointAllocator{},
 		}
 	})
 

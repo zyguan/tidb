@@ -502,7 +502,7 @@ func (ran *Range) IntersectRange(tc types.Context, otherRange *Range) (*Range, e
 	lowVsHigh, err := compareLexicographically(tc, ran.LowVal, otherRange.HighVal, ran.Collators,
 		ran.LowExclude, otherRange.HighExclude, true, false)
 	if err != nil {
-		return &Range{}, err
+		return nil, err
 	}
 	if lowVsHigh == 1 {
 		return nil, nil
@@ -511,7 +511,7 @@ func (ran *Range) IntersectRange(tc types.Context, otherRange *Range) (*Range, e
 	lowVsHigh, err = compareLexicographically(tc, otherRange.LowVal, ran.HighVal, ran.Collators,
 		otherRange.LowExclude, ran.HighExclude, true, false)
 	if err != nil {
-		return &Range{}, err
+		return nil, err
 	}
 	if lowVsHigh == 1 {
 		return nil, nil
@@ -520,7 +520,7 @@ func (ran *Range) IntersectRange(tc types.Context, otherRange *Range) (*Range, e
 	lowVsLow, err := compareLexicographically(tc, ran.LowVal, otherRange.LowVal,
 		ran.Collators, ran.LowExclude, otherRange.LowExclude, true, true)
 	if err != nil {
-		return &Range{}, err
+		return nil, err
 	}
 	if lowVsLow == -1 {
 		result.LowVal = otherRange.LowVal
@@ -533,7 +533,7 @@ func (ran *Range) IntersectRange(tc types.Context, otherRange *Range) (*Range, e
 	highVsHigh, err := compareLexicographically(tc, ran.HighVal, otherRange.HighVal,
 		ran.Collators, ran.HighExclude, otherRange.HighExclude, false, false)
 	if err != nil {
-		return &Range{}, err
+		return nil, err
 	}
 	if highVsHigh == 1 {
 		result.HighVal = otherRange.HighVal
