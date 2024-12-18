@@ -811,6 +811,19 @@ def go_deps():
         ],
     )
     go_repository(
+        name = "com_github_bytedance_gopkg",
+        build_file_proto_mode = "disable_global",
+        importpath = "github.com/bytedance/gopkg",
+        sha256 = "cbda5ebb815daf335eba44f3fe718a6284bd831a05d07594ab53e498b112676b",
+        strip_prefix = "github.com/bytedance/gopkg@v0.1.0",
+        urls = [
+            "http://bazel-cache.pingcap.net:8080/gomod/github.com/bytedance/gopkg/com_github_bytedance_gopkg-v0.1.0.zip",
+            "http://ats.apps.svc/gomod/github.com/bytedance/gopkg/com_github_bytedance_gopkg-v0.1.0.zip",
+            "https://cache.hawkingrei.com/gomod/github.com/bytedance/gopkg/com_github_bytedance_gopkg-v0.1.0.zip",
+            "https://storage.googleapis.com/pingcapmirror/gomod/github.com/bytedance/gopkg/com_github_bytedance_gopkg-v0.1.0.zip",
+        ],
+    )
+    go_repository(
         name = "com_github_cakturk_go_netstat",
         build_file_proto_mode = "disable_global",
         importpath = "github.com/cakturk/go-netstat",
@@ -1042,6 +1055,19 @@ def go_deps():
             "http://ats.apps.svc/gomod/github.com/cloudfoundry/gosigar/com_github_cloudfoundry_gosigar-v1.3.6.zip",
             "https://cache.hawkingrei.com/gomod/github.com/cloudfoundry/gosigar/com_github_cloudfoundry_gosigar-v1.3.6.zip",
             "https://storage.googleapis.com/pingcapmirror/gomod/github.com/cloudfoundry/gosigar/com_github_cloudfoundry_gosigar-v1.3.6.zip",
+        ],
+    )
+    go_repository(
+        name = "com_github_cloudwego_netpoll",
+        build_file_proto_mode = "disable_global",
+        importpath = "github.com/cloudwego/netpoll",
+        sha256 = "2447b3b09a207e8462e6d729e9872e819bf7bd439234a23255390ba880502373",
+        strip_prefix = "github.com/cloudwego/netpoll@v0.6.5",
+        urls = [
+            "http://bazel-cache.pingcap.net:8080/gomod/github.com/cloudwego/netpoll/com_github_cloudwego_netpoll-v0.6.5.zip",
+            "http://ats.apps.svc/gomod/github.com/cloudwego/netpoll/com_github_cloudwego_netpoll-v0.6.5.zip",
+            "https://cache.hawkingrei.com/gomod/github.com/cloudwego/netpoll/com_github_cloudwego_netpoll-v0.6.5.zip",
+            "https://storage.googleapis.com/pingcapmirror/gomod/github.com/cloudwego/netpoll/com_github_cloudwego_netpoll-v0.6.5.zip",
         ],
     )
     go_repository(

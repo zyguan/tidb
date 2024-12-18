@@ -12,6 +12,7 @@ go_library(
         "//pkg/server/internal/util",
         "//pkg/server/metrics",
         "//pkg/sessionctx/variable",
+        "@com_github_cloudwego_netpoll//:go_default_library",
         "@com_github_klauspost_compress//zstd",
         "@com_github_pingcap_errors//:errors",
     ],
