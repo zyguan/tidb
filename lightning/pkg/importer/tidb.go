@@ -30,12 +30,10 @@ import (
 	"github.com/pingcap/tidb/pkg/lightning/log"
 	"github.com/pingcap/tidb/pkg/lightning/metric"
 	"github.com/pingcap/tidb/pkg/lightning/mydump"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
-	"github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/tikv/client-go/v2/util"
 	"go.uber.org/zap"
 )
@@ -66,23 +64,23 @@ func DBFromConfig(ctx context.Context, dsn config.DBStore) (*sql.DB, error) {
 	}
 
 	vars := map[string]string{
-		variable.TiDBBuildStatsConcurrency:      strconv.Itoa(dsn.BuildStatsConcurrency),
-		variable.TiDBDistSQLScanConcurrency:     strconv.Itoa(dsn.DistSQLScanConcurrency),
-		variable.TiDBIndexSerialScanConcurrency: strconv.Itoa(dsn.IndexSerialScanConcurrency),
-		variable.TiDBChecksumTableConcurrency:   strconv.Itoa(dsn.ChecksumTableConcurrency),
+		vardef.TiDBBuildStatsConcurrency:      strconv.Itoa(dsn.BuildStatsConcurrency),
+		vardef.TiDBDistSQLScanConcurrency:     strconv.Itoa(dsn.DistSQLScanConcurrency),
+		vardef.TiDBIndexSerialScanConcurrency: strconv.Itoa(dsn.IndexSerialScanConcurrency),
+		vardef.TiDBChecksumTableConcurrency:   strconv.Itoa(dsn.ChecksumTableConcurrency),
 
 		// after https://github.com/pingcap/tidb/pull/17102 merge,
 		// we need set session to true for insert auto_random value in TiDB Backend
-		variable.TiDBAllowAutoRandExplicitInsert: "1",
+		vardef.TiDBAllowAutoRandExplicitInsert: "1",
 		// allow use _tidb_rowid in sql statement
-		variable.TiDBOptWriteRowID: "1",
+		vardef.TiDBOptWriteRowID: "1",
 		// always set auto-commit to ON
-		variable.AutoCommit: "1",
+		vardef.AutoCommit: "1",
 		// always set transaction mode to optimistic
-		variable.TiDBTxnMode: "optimistic",
+		vardef.TiDBTxnMode: "optimistic",
 		// disable foreign key checks
-		variable.ForeignKeyChecks:              "0",
-		variable.TiDBExplicitRequestSourceType: util.ExplicitTypeLightning,
+		vardef.ForeignKeyChecks:              "0",
+		vardef.TiDBExplicitRequestSourceType: util.ExplicitTypeLightning,
 	}
 
 	if dsn.Vars != nil {
@@ -129,47 +127,6 @@ func NewTiDBManagerWithDB(db *sql.DB, sqlMode mysql.SQLMode) *TiDBManager {
 // Close closes the underlying database connection.
 func (timgr *TiDBManager) Close() {
 	timgr.db.Close()
-}
-
-func createIfNotExistsStmt(p *parser.Parser, createTable, dbName, tblName string) ([]string, error) {
-	stmts, _, err := p.ParseSQL(createTable)
-	if err != nil {
-		return []string{}, common.ErrInvalidSchemaStmt.Wrap(err).GenWithStackByArgs(createTable)
-	}
-
-	var res strings.Builder
-	ctx := format.NewRestoreCtx(format.DefaultRestoreFlags|format.RestoreTiDBSpecialComment|format.RestoreWithTTLEnableOff, &res)
-
-	retStmts := make([]string, 0, len(stmts))
-	for _, stmt := range stmts {
-		switch node := stmt.(type) {
-		case *ast.CreateDatabaseStmt:
-			node.Name = model.NewCIStr(dbName)
-			node.IfNotExists = true
-		case *ast.DropDatabaseStmt:
-			node.Name = model.NewCIStr(dbName)
-			node.IfExists = true
-		case *ast.CreateTableStmt:
-			node.Table.Schema = model.NewCIStr(dbName)
-			node.Table.Name = model.NewCIStr(tblName)
-			node.IfNotExists = true
-		case *ast.CreateViewStmt:
-			node.ViewName.Schema = model.NewCIStr(dbName)
-			node.ViewName.Name = model.NewCIStr(tblName)
-		case *ast.DropTableStmt:
-			node.Tables[0].Schema = model.NewCIStr(dbName)
-			node.Tables[0].Name = model.NewCIStr(tblName)
-			node.IfExists = true
-		}
-		if err := stmt.Restore(ctx); err != nil {
-			return []string{}, common.ErrInvalidSchemaStmt.Wrap(err).GenWithStackByArgs(createTable)
-		}
-		ctx.WritePlain(";")
-		retStmts = append(retStmts, res.String())
-		res.Reset()
-	}
-
-	return retStmts, nil
 }
 
 // DropTable drops a table.

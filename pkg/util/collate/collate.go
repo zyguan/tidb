@@ -72,6 +72,8 @@ type Collator interface {
 	KeyWithoutTrimRightSpace(str string) []byte
 	// Pattern get a collation-aware WildcardPattern.
 	Pattern() WildcardPattern
+	// Clone returns a copy of the collator.
+	Clone() Collator
 }
 
 // WildcardPattern is the interface used for wildcard pattern match.
@@ -165,7 +167,7 @@ func GetBinaryCollatorSlice(n int) []Collator {
 		return binCollatorInstanceSliceWithLen1
 	}
 	collators := make([]Collator, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		collators[i] = binCollatorInstance
 	}
 	return collators
@@ -331,26 +333,34 @@ func IsDefaultCollationForUTF8MB4(collate string) bool {
 func IsCICollation(collate string) bool {
 	return collate == "utf8_general_ci" || collate == "utf8mb4_general_ci" ||
 		collate == "utf8_unicode_ci" || collate == "utf8mb4_unicode_ci" || collate == "gbk_chinese_ci" ||
-		collate == "utf8mb4_0900_ai_ci"
+		collate == "utf8mb4_0900_ai_ci" || collate == "gb18030_chinese_ci"
 }
 
-// ConvertAndGetBinCollation converts collator to binary collator
-func ConvertAndGetBinCollation(collate string) Collator {
+// ConvertAndGetBinCollation converts collation to binary collation
+func ConvertAndGetBinCollation(collate string) string {
 	switch collate {
 	case "utf8_general_ci":
-		return GetCollator("utf8_bin")
+		return "utf8_bin"
 	case "utf8_unicode_ci":
-		return GetCollator("utf8_bin")
+		return "utf8_bin"
 	case "utf8mb4_general_ci":
-		return GetCollator("utf8mb4_bin")
+		return "utf8mb4_bin"
 	case "utf8mb4_unicode_ci":
-		return GetCollator("utf8mb4_bin")
+		return "utf8mb4_bin"
 	case "utf8mb4_0900_ai_ci":
-		return GetCollator("utf8mb4_bin")
+		return "utf8mb4_bin"
 	case "gbk_chinese_ci":
-		return GetCollator("gbk_bin")
+		return "gbk_bin"
+	case "gb18030_chinese_ci":
+		return "gb18030_bin"
 	}
-	return GetCollator(collate)
+
+	return collate
+}
+
+// ConvertAndGetBinCollator converts collation to binary collator
+func ConvertAndGetBinCollator(collate string) Collator {
+	return GetCollator(ConvertAndGetBinCollation(collate))
 }
 
 // IsBinCollation returns if the collation is 'xx_bin' or 'bin'.
@@ -361,6 +371,11 @@ func IsBinCollation(collate string) bool {
 		collate == charset.CollationUTF8 || collate == charset.CollationUTF8MB4 ||
 		collate == charset.CollationBin || collate == "utf8mb4_0900_bin"
 	// TODO: define a constant to reference collations
+}
+
+// IsPadSpaceCollation returns whether the collation is a PAD SPACE collation.
+func IsPadSpaceCollation(collation string) bool {
+	return collation != charset.CollationBin && collation != "utf8mb4_0900_ai_ci" && collation != "utf8mb4_0900_bin"
 }
 
 // CollationToProto converts collation from string to int32(used by protocol).
@@ -376,6 +391,18 @@ func CollationToProto(c string) int32 {
 		zap.String("default collation", mysql.DefaultCollationName),
 	)
 	return v
+}
+
+// CanUseRawMemAsKey returns true if current collator can use the original raw memory as the key
+// only return true for binCollator and derivedBinCollator
+func CanUseRawMemAsKey(c Collator) bool {
+	if _, ok := c.(*binCollator); ok {
+		return true
+	}
+	if _, ok := c.(*derivedBinCollator); ok {
+		return true
+	}
+	return false
 }
 
 // ProtoToCollation converts collation from int32(used by protocol) to string.
@@ -428,4 +455,8 @@ func init() {
 	newCollatorIDMap[CollationName2ID(charset.CollationGBKBin)] = &gbkBinCollator{charset.NewCustomGBKEncoder()}
 	newCollatorMap[charset.CollationGBKChineseCI] = &gbkChineseCICollator{}
 	newCollatorIDMap[CollationName2ID(charset.CollationGBKChineseCI)] = &gbkChineseCICollator{}
+	newCollatorMap[charset.CollationGB18030Bin] = &gb18030BinCollator{charset.NewCustomGB18030Encoder()}
+	newCollatorIDMap[CollationName2ID(charset.CollationGB18030Bin)] = &gb18030BinCollator{charset.NewCustomGB18030Encoder()}
+	newCollatorMap[charset.CollationGB18030ChineseCI] = &gb18030ChineseCICollator{}
+	newCollatorIDMap[CollationName2ID(charset.CollationGB18030ChineseCI)] = &gb18030ChineseCICollator{}
 }

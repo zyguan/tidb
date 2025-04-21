@@ -21,10 +21,10 @@ import (
 	"testing"
 
 	"github.com/jfcg/sorty/v2"
-	"github.com/pingcap/tidb/br/pkg/membuf"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	dbkv "github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/lightning/common"
+	"github.com/pingcap/tidb/pkg/lightning/membuf"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,6 +54,8 @@ func testReadAndCompare(
 		math.MaxInt64,
 		4*1024*1024*1024,
 		math.MaxInt64,
+		math.MaxInt64,
+		math.MaxInt64,
 	)
 	require.NoError(t, err)
 
@@ -63,7 +65,7 @@ func testReadAndCompare(
 	kvIdx := 0
 
 	for {
-		endKeyOfGroup, dataFilesOfGroup, statFilesOfGroup, _, err := splitter.SplitOneRangesGroup()
+		endKeyOfGroup, dataFilesOfGroup, statFilesOfGroup, _, _, err := splitter.SplitOneRangesGroup()
 		require.NoError(t, err)
 		curEnd := dbkv.Key(endKeyOfGroup).Clone()
 		if len(endKeyOfGroup) == 0 {
@@ -86,26 +88,24 @@ func testReadAndCompare(
 
 		// check kvs sorted
 		sorty.MaxGor = uint64(8)
-		sorty.Sort(len(loaded.keys), func(i, k, r, s int) bool {
-			if bytes.Compare(loaded.keys[i], loaded.keys[k]) < 0 { // strict comparator like < or >
+		sorty.Sort(len(loaded.kvs), func(i, k, r, s int) bool {
+			if bytes.Compare(loaded.kvs[i].key, loaded.kvs[k].key) < 0 { // strict comparator like < or >
 				if r != s {
-					loaded.keys[r], loaded.keys[s] = loaded.keys[s], loaded.keys[r]
-					loaded.values[r], loaded.values[s] = loaded.values[s], loaded.values[r]
+					loaded.kvs[r], loaded.kvs[s] = loaded.kvs[s], loaded.kvs[r]
 				}
 				return true
 			}
 			return false
 		})
-		for i, key := range loaded.keys {
-			require.EqualValues(t, kvs[kvIdx].Key, key)
-			require.EqualValues(t, kvs[kvIdx].Val, loaded.values[i])
+		for _, kv := range loaded.kvs {
+			require.EqualValues(t, kvs[kvIdx].Key, kv.key)
+			require.EqualValues(t, kvs[kvIdx].Val, kv.value)
 			kvIdx++
 		}
 		curStart = curEnd.Clone()
 
 		// release
-		loaded.keys = nil
-		loaded.values = nil
+		loaded.kvs = nil
 		loaded.memKVBuffers = nil
 
 		if len(endKeyOfGroup) == 0 {

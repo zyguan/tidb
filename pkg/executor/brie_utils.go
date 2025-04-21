@@ -24,7 +24,8 @@ import (
 	"github.com/pingcap/tidb/pkg/domain"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/autoid"
-	"github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/sessionctx"
 	"go.uber.org/zap"
@@ -53,7 +54,7 @@ func showRestoredCreateDatabase(sctx sessionctx.Context, db *model.DBInfo, brCom
 
 // BRIECreateDatabase creates the database with OnExistIgnore option
 func BRIECreateDatabase(sctx sessionctx.Context, schema *model.DBInfo, brComment string) error {
-	d := domain.GetDomain(sctx).DDL()
+	d := domain.GetDomain(sctx).DDLExecutor()
 	query, err := showRestoredCreateDatabase(sctx, schema, brComment)
 	if err != nil {
 		return errors.Trace(err)
@@ -87,13 +88,13 @@ func showRestoredCreateTable(sctx sessionctx.Context, tbl *model.TableInfo, brCo
 // BRIECreateTable creates the table with OnExistIgnore option
 func BRIECreateTable(
 	sctx sessionctx.Context,
-	dbName model.CIStr,
-	table *model.TableInfo,
+	dbName ast.CIStr,
+	clonedTable *model.TableInfo,
 	brComment string,
-	cs ...ddl.CreateTableWithInfoConfigurier,
+	cs ...ddl.CreateTableOption,
 ) error {
-	d := domain.GetDomain(sctx).DDL()
-	query, err := showRestoredCreateTable(sctx, table, brComment)
+	d := domain.GetDomain(sctx).DDLExecutor()
+	query, err := showRestoredCreateTable(sctx, clonedTable, brComment)
 	if err != nil {
 		return err
 	}
@@ -107,17 +108,15 @@ func BRIECreateTable(
 		sctx.GetSessionVars().ForeignKeyChecks = originForeignKeyChecks
 	}()
 
-	table = table.Clone()
-
-	return d.CreateTableWithInfo(sctx, dbName, table, append(cs, ddl.OnExistIgnore)...)
+	return d.CreateTableWithInfo(sctx, dbName, clonedTable, nil, append(cs, ddl.WithOnExist(ddl.OnExistIgnore))...)
 }
 
 // BRIECreateTables creates the tables with OnExistIgnore option in batch
 func BRIECreateTables(
 	sctx sessionctx.Context,
-	tables map[string][]*model.TableInfo,
+	clonedTables map[string][]*model.TableInfo,
 	brComment string,
-	cs ...ddl.CreateTableWithInfoConfigurier,
+	cs ...ddl.CreateTableOption,
 ) error {
 	// Disable foreign key check when batch create tables.
 	originForeignKeyChecks := sctx.GetSessionVars().ForeignKeyChecks
@@ -127,10 +126,9 @@ func BRIECreateTables(
 		sctx.SetValue(sessionctx.QueryString, originQuery)
 		sctx.GetSessionVars().ForeignKeyChecks = originForeignKeyChecks
 	}()
-	for db, tablesInDB := range tables {
-		dbName := model.NewCIStr(db)
+	for db, tablesInDB := range clonedTables {
+		dbName := ast.NewCIStr(db)
 		queryBuilder := strings.Builder{}
-		cloneTables := make([]*model.TableInfo, 0, len(tablesInDB))
 		for _, table := range tablesInDB {
 			query, err := showRestoredCreateTable(sctx, table, brComment)
 			if err != nil {
@@ -139,11 +137,9 @@ func BRIECreateTables(
 
 			queryBuilder.WriteString(query)
 			queryBuilder.WriteString(";")
-
-			cloneTables = append(cloneTables, table.Clone())
 		}
 		sctx.SetValue(sessionctx.QueryString, queryBuilder.String())
-		if err := splitBatchCreateTable(sctx, dbName, cloneTables, cs...); err != nil {
+		if err := splitBatchCreateTable(sctx, dbName, tablesInDB, cs...); err != nil {
 			//It is possible to failure when TiDB does not support model.ActionCreateTables.
 			//In this circumstance, BatchCreateTableWithInfo returns errno.ErrInvalidDDLJob,
 			//we fall back to old way that creating table one by one
@@ -158,11 +154,11 @@ func BRIECreateTables(
 // splitBatchCreateTable provide a way to split batch into small batch when batch size is large than 6 MB.
 // The raft entry has limit size of 6 MB, a batch of CreateTables may hit this limitation
 // TODO: shall query string be set for each split batch create, it looks does not matter if we set once for all.
-func splitBatchCreateTable(sctx sessionctx.Context, schema model.CIStr,
-	infos []*model.TableInfo, cs ...ddl.CreateTableWithInfoConfigurier) error {
+func splitBatchCreateTable(sctx sessionctx.Context, schema ast.CIStr,
+	infos []*model.TableInfo, cs ...ddl.CreateTableOption) error {
 	var err error
-	d := domain.GetDomain(sctx).DDL()
-	err = d.BatchCreateTableWithInfo(sctx, schema, infos, append(cs, ddl.OnExistIgnore)...)
+	d := domain.GetDomain(sctx).DDLExecutor()
+	err = d.BatchCreateTableWithInfo(sctx, schema, infos, append(cs, ddl.WithOnExist(ddl.OnExistIgnore))...)
 	if kv.ErrEntryTooLarge.Equal(err) {
 		log.Info("entry too large, split batch create table", zap.Int("num table", len(infos)))
 		if len(infos) == 1 {

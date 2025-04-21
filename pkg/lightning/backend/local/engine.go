@@ -27,6 +27,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/objstorage/objstorageprovider"
@@ -37,14 +38,16 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/tidb/br/pkg/logutil"
-	"github.com/pingcap/tidb/br/pkg/membuf"
+	"github.com/pingcap/tidb/pkg/ingestor/engineapi"
 	"github.com/pingcap/tidb/pkg/lightning/backend"
 	"github.com/pingcap/tidb/pkg/lightning/backend/encode"
 	"github.com/pingcap/tidb/pkg/lightning/backend/kv"
 	"github.com/pingcap/tidb/pkg/lightning/checkpoints"
 	"github.com/pingcap/tidb/pkg/lightning/common"
+	"github.com/pingcap/tidb/pkg/lightning/config"
 	"github.com/pingcap/tidb/pkg/lightning/log"
-	"github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/lightning/membuf"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/hack"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/atomic"
@@ -89,10 +92,10 @@ type engineMeta struct {
 
 type syncedRanges struct {
 	sync.Mutex
-	ranges []common.Range
+	ranges []engineapi.Range
 }
 
-func (r *syncedRanges) add(g common.Range) {
+func (r *syncedRanges) add(g engineapi.Range) {
 	r.Lock()
 	r.ranges = append(r.ranges, g)
 	r.Unlock()
@@ -111,6 +114,10 @@ type Engine struct {
 	db           atomic.Pointer[pebble.DB]
 	UUID         uuid.UUID
 	localWriters sync.Map
+
+	regionSplitSize      int64
+	regionSplitKeyCnt    int64
+	regionSplitKeysCache [][]byte
 
 	// isImportingAtomic is an atomic variable indicating whether this engine is importing.
 	// This should not be used as a "spin lock" indicator.
@@ -151,6 +158,8 @@ type Engine struct {
 
 	logger log.Logger
 }
+
+var _ engineapi.Engine = (*Engine)(nil)
 
 func (e *Engine) setError(err error) {
 	if err != nil {
@@ -262,6 +271,8 @@ func (e *Engine) unlock() {
 	e.mutex.Unlock()
 }
 
+var sizeOfKVPair = int64(unsafe.Sizeof(common.KvPair{}))
+
 // TotalMemorySize returns the total memory size of the engine.
 func (e *Engine) TotalMemorySize() int64 {
 	var memSize int64
@@ -272,6 +283,9 @@ func (e *Engine) TotalMemorySize() int64 {
 			memSize += w.kvBuffer.TotalSize()
 			w.Unlock()
 		}
+		w.Lock()
+		memSize += sizeOfKVPair * int64(cap(w.writeBatch))
+		w.Unlock()
 		return true
 	})
 	return memSize
@@ -301,24 +315,34 @@ func (e *Engine) GetKeyRange() (startKey []byte, endKey []byte, err error) {
 	return firstLey, nextKey(lastKey), nil
 }
 
-// SplitRanges gets size properties from pebble and split ranges according to size/keys limit.
-func (e *Engine) SplitRanges(
-	startKey, endKey []byte,
-	sizeLimit, keysLimit int64,
-	logger log.Logger,
-) ([]common.Range, error) {
-	sizeProps, err := getSizePropertiesFn(logger, e.getDB(), e.keyAdapter)
+// GetRegionSplitKeys implements common.Engine.
+func (e *Engine) GetRegionSplitKeys() ([][]byte, error) {
+	return e.getRegionSplitKeys(e.regionSplitSize, e.regionSplitKeyCnt)
+}
+
+func (e *Engine) getRegionSplitKeys(regionSplitSize, regionSplitKeyCnt int64) ([][]byte, error) {
+	sizeProps, err := getSizePropertiesFn(e.logger, e.getDB(), e.keyAdapter)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	startKey, endKey, err := e.GetKeyRange()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
 	ranges := splitRangeBySizeProps(
-		common.Range{Start: startKey, End: endKey},
+		engineapi.Range{Start: startKey, End: endKey},
 		sizeProps,
-		sizeLimit,
-		keysLimit,
+		regionSplitSize,
+		regionSplitKeyCnt,
 	)
-	return ranges, nil
+	keys := make([][]byte, 0, len(ranges)+1)
+	for _, r := range ranges {
+		keys = append(keys, r.Start)
+	}
+	keys = append(keys, ranges[len(ranges)-1].End)
+	e.regionSplitKeysCache = keys
+	return keys, nil
 }
 
 type rangeOffsets struct {
@@ -1006,11 +1030,11 @@ func (e *Engine) newKVIter(ctx context.Context, opts *pebble.IterOptions, buf *m
 	)
 }
 
-var _ common.IngestData = (*Engine)(nil)
+var _ engineapi.IngestData = (*Engine)(nil)
 
 // GetFirstAndLastKey reads the first and last key in range [lowerBound, upperBound)
 // in the engine. Empty upperBound means unbounded.
-func (e *Engine) GetFirstAndLastKey(lowerBound, upperBound []byte) ([]byte, []byte, error) {
+func (e *Engine) GetFirstAndLastKey(lowerBound, upperBound []byte) (firstKey, lastKey []byte, err error) {
 	if len(upperBound) == 0 {
 		// we use empty slice for unbounded upper bound, but it means max value in pebble
 		// so reset to nil
@@ -1035,12 +1059,12 @@ func (e *Engine) GetFirstAndLastKey(lowerBound, upperBound []byte) ([]byte, []by
 	if !hasKey {
 		return nil, nil, nil
 	}
-	firstKey := append([]byte{}, iter.Key()...)
+	firstKey = append([]byte{}, iter.Key()...)
 	iter.Last()
 	if iter.Error() != nil {
 		return nil, nil, errors.Annotate(iter.Error(), "failed to seek to the last key")
 	}
-	lastKey := append([]byte{}, iter.Key()...)
+	lastKey = append([]byte{}, iter.Key()...)
 	return firstKey, lastKey, nil
 }
 
@@ -1049,7 +1073,7 @@ func (e *Engine) NewIter(
 	ctx context.Context,
 	lowerBound, upperBound []byte,
 	bufPool *membuf.Pool,
-) common.ForwardIter {
+) engineapi.ForwardIter {
 	return e.newKVIter(
 		ctx,
 		&pebble.IterOptions{LowerBound: lowerBound, UpperBound: upperBound},
@@ -1078,15 +1102,33 @@ func (e *Engine) Finish(totalBytes, totalCount int64) {
 // IngestData interface.
 func (e *Engine) LoadIngestData(
 	ctx context.Context,
-	regionRanges []common.Range,
-	outCh chan<- common.DataAndRange,
-) error {
-	for _, r := range regionRanges {
+	outCh chan<- engineapi.DataAndRanges,
+) (err error) {
+	jobRangeKeys := e.regionSplitKeysCache
+	// when the region is large, we need to split to smaller job ranges to increase
+	// the concurrency.
+	if jobRangeKeys == nil || e.regionSplitSize > 2*int64(config.SplitRegionSize) {
+		e.regionSplitKeysCache = nil
+		jobRangeKeys, err = e.getRegionSplitKeys(
+			int64(config.SplitRegionSize), int64(config.SplitRegionKeys),
+		)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	prev := jobRangeKeys[0]
+	for i := 1; i < len(jobRangeKeys); i++ {
+		cur := jobRangeKeys[i]
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case outCh <- common.DataAndRange{Data: e, Range: r}:
+		case outCh <- engineapi.DataAndRanges{
+			Data:         e,
+			SortedRanges: []engineapi.Range{{Start: prev, End: cur}},
+		}:
 		}
+		prev = cur
 	}
 	return nil
 }
@@ -1382,6 +1424,16 @@ func newSSTWriter(path string, blockSize int) (*sstable.Writer, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+
+	// Logic to ensure the default block size is set to 16KB.
+	// If a smaller block size is used (e.g., 4KB, the default for Pebble),
+	// a single large SST file may generate a disproportionately large index block,
+	// potentially causing a memory spike and leading to an Out of Memory (OOM) scenario.
+	// If the user specifies a smaller block size, respect their choice.
+	if blockSize <= 0 {
+		blockSize = config.DefaultBlockSize
+	}
+
 	writable := objstorageprovider.NewFileWritable(f)
 	writer := sstable.NewWriter(writable, sstable.WriterOptions{
 		TablePropertyCollectors: []func() pebble.TablePropertyCollector{
@@ -1485,7 +1537,7 @@ func (h *sstIterHeap) Pop() any {
 }
 
 // Next implements common.Iterator.
-func (h *sstIterHeap) Next() ([]byte, []byte, error) {
+func (h *sstIterHeap) Next() (key, val []byte, err error) {
 	for {
 		if len(h.iters) == 0 {
 			return nil, nil, nil

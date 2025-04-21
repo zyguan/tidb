@@ -22,12 +22,13 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/pkg/expression"
 	"github.com/pingcap/tidb/pkg/infoschema"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
-	"github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/terror"
 	"github.com/pingcap/tidb/pkg/planner/core"
+	"github.com/pingcap/tidb/pkg/planner/core/resolve"
 	"github.com/pingcap/tidb/pkg/session"
 	"github.com/pingcap/tidb/pkg/sessionctx"
 	"github.com/pingcap/tidb/pkg/testkit"
@@ -46,8 +47,9 @@ func runSQL(t *testing.T, ctx sessionctx.Context, is infoschema.InfoSchema, sql 
 	if inPrepare {
 		opts = append(opts, core.InPrepare)
 	}
-	err = core.Preprocess(context.Background(), ctx, stmt, append(opts, core.WithPreprocessorReturn(&core.PreprocessorReturn{InfoSchema: is}))...)
-	require.Truef(t, terror.ErrorEqual(err, terr), "sql: %s, err:%v", sql, err)
+	nodeW := resolve.NewNodeW(stmt)
+	err = core.Preprocess(context.Background(), ctx, nodeW, append(opts, core.WithPreprocessorReturn(&core.PreprocessorReturn{InfoSchema: is}))...)
+	require.Truef(t, terror.ErrorEqual(err, terr), "sql: %s, err:%v, terr:%v", sql, err, terr)
 }
 
 func TestValidator(t *testing.T) {
@@ -278,6 +280,12 @@ func TestValidator(t *testing.T) {
 		{"select * from t tablesample bernoulli(10 rows);", false, expression.ErrInvalidTableSample},
 		{"select * from t tablesample bernoulli(23 percent) repeatable (23);", false, expression.ErrInvalidTableSample},
 		{"select * from t tablesample system() repeatable (10);", false, expression.ErrInvalidTableSample},
+
+		// issue 45674
+		{"alter table t2 add (b int)", true, nil},
+		{"alter table t2 add (b int)", false, infoschema.ErrTableNotExists.GenWithStackByArgs("test", "t2")},
+		{"create index x on t2(x)", true, nil},
+		{"create index x on t2(x)", false, infoschema.ErrTableNotExists.GenWithStackByArgs("test", "t2")},
 	}
 
 	store := testkit.CreateMockStore(t)
@@ -402,7 +410,8 @@ func TestPreprocessCTE(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, stmts, 1)
 
-		err = core.Preprocess(context.Background(), tk.Session(), stmts[0])
+		nodeW := resolve.NewNodeW(stmts[0])
+		err = core.Preprocess(context.Background(), tk.Session(), nodeW)
 		require.NoError(t, err)
 
 		var rs strings.Builder
@@ -410,4 +419,15 @@ func TestPreprocessCTE(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.after, rs.String())
 	}
+}
+
+func TestPreprocessDeleteFromWithAlias(t *testing.T) {
+	// https://github.com/pingcap/tidb/issues/56726
+	store := testkit.CreateMockStore(t)
+	tk := testkit.NewTestKit(t, store)
+	tk.MustExec("use test")
+	tk.MustExec("create table t1(id int);")
+	tk.MustExec(" create table t2(id int);")
+	tk.MustExec("delete tt1 from t1 tt1,(select max(id) id from t2)tt2 where tt1.id<=tt2.id;")
+	tk.MustExec("create global binding for delete tt1 from t1 tt1,(select max(id) id from t2)tt2 where tt1.id<=tt2.id using delete /*+ MAX_EXECUTION_TIME(10)*/ tt1 from t1 tt1,(select max(id) id from t2)tt2 where tt1.id<=tt2.id;")
 }

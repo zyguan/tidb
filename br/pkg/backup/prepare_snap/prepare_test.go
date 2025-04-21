@@ -265,7 +265,7 @@ func (m *mockStores) AssertIsNormalMode(t *testing.T) {
 
 func fakeCluster(t *testing.T, nodes int, keys ...[]byte) pd.Client {
 	tmp := t.TempDir()
-	_, pdc, cluster, err := unistore.New(tmp, nil)
+	_, pdc, cluster, err := unistore.New(tmp, nil, nil)
 	unistore.BootstrapWithMultiStores(cluster, nodes)
 	require.NoError(t, err)
 	cluster.SplitArbitrary(keys...)
@@ -428,9 +428,8 @@ func TestRetryEnv(t *testing.T) {
 		return nil
 	}
 	ms := RetryAndSplitRequestEnv{Env: tms}
-	ms.GetBackoffer = func() utils.Backoffer {
-		o := utils.InitialRetryState(2, 0, 0)
-		return &o
+	ms.GetBackoffStrategy = func() utils.BackoffStrategy {
+		return utils.NewBackoffRetryAllErrorStrategy(2, 0, 0)
 	}
 	prep := New(ms)
 	ctx := context.Background()

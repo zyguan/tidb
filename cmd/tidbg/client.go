@@ -30,7 +30,7 @@ func (cfg *ClientFlags) RegisterPFlags(flags *pflag.FlagSet) {
 	flags.StringVarP(&cfg.Pass, "password", "p", "", "password to connect to the database")
 	flags.StringVarP(&cfg.Host, "host", "h", "127.0.0.1", "host of the database")
 	flags.IntVarP(&cfg.Port, "port", "P", 4000, "port number to use for connection")
-	flags.StringVar(&cfg.PD, "pd", "", "pdd address to connect (eg. 127.0.0.1:2379)")
+	flags.StringVar(&cfg.PD, "pd", "", "pd address to connect (eg. 127.0.0.1:2379)")
 	flags.StringVar(&cfg.KV, "kv", "", "tikv address to connect (eg. 127.0.0.1:20160)")
 	flags.Bool("help", false, "help message")
 }

@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pingcap/tidb/br/pkg/mock/mocklocal"
+	"github.com/pingcap/tidb/pkg/ingestor/engineapi"
 	"github.com/pingcap/tidb/pkg/lightning/backend"
 	"github.com/pingcap/tidb/pkg/lightning/common"
 	"github.com/pingcap/tidb/pkg/lightning/config"
@@ -89,9 +90,9 @@ func TestEngineManager(t *testing.T) {
 	require.ErrorContains(t, em.closeEngine(ctx, &backend.EngineConfig{}, uuid.New()), "does not exist")
 
 	// reset non-existent engine should work
-	require.NoError(t, em.resetEngine(ctx, uuid.New()))
+	require.NoError(t, em.resetEngine(ctx, uuid.New(), false))
 	storeHelper.EXPECT().GetTS(gomock.Any()).Return(int64(0), int64(0), nil)
-	require.NoError(t, em.resetEngine(ctx, engine1ID))
+	require.NoError(t, em.resetEngine(ctx, engine1ID, false))
 	require.Equal(t, 1, syncMapLen(&em.engines))
 	_, ok = em.engines.Load(engine1ID)
 	require.True(t, ok)
@@ -107,7 +108,7 @@ func TestEngineManager(t *testing.T) {
 
 func TestGetExternalEngineKVStatistics(t *testing.T) {
 	em := &engineManager{
-		externalEngine: map[uuid.UUID]common.Engine{},
+		externalEngine: map[uuid.UUID]engineapi.Engine{},
 	}
 	// non existent uuid
 	size, count := em.getExternalEngineKVStatistics(uuid.New())

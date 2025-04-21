@@ -27,11 +27,11 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/terror"
-	"github.com/pingcap/tidb/pkg/sessionctx/stmtctx"
-	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/pingcap/tidb/pkg/testkit/testutil"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	contextutil "github.com/pingcap/tidb/pkg/util/context"
 	"github.com/pingcap/tidb/pkg/util/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -93,7 +93,7 @@ func TestLengthAndOctetLength(t *testing.T) {
 	}
 	for _, lengthMethod := range lengthMethods {
 		for _, c := range tbl {
-			err := ctx.GetSessionVars().SetSystemVarWithoutValidation(variable.CharacterSetConnection, c.chs)
+			err := ctx.GetSessionVars().SetSystemVarWithoutValidation(vardef.CharacterSetConnection, c.chs)
 			require.NoError(t, err)
 			f, err := newFunctionForTest(ctx, lengthMethod, primitiveValsToConstants(ctx, []any{c.input})...)
 			require.NoError(t, err)
@@ -150,11 +150,13 @@ func TestASCII(t *testing.T) {
 		{"你好", "gbk", 196},
 		{"你好", "", 228},
 		{"世界", "gbk", 202},
-		{"世界", "", 228},
+		{"abc", "gb18030", 97},
+		{"你好", "gb18030", 196},
+		{"世界", "gb18030", 202},
 	}
 
 	for _, c := range tbl {
-		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(variable.CharacterSetConnection, c.chs)
+		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(vardef.CharacterSetConnection, c.chs)
 		require.NoError(t, err)
 		f, err := newFunctionForTest(ctx, ast.ASCII, primitiveValsToConstants(ctx, []any{c.input})...)
 		require.NoError(t, err)
@@ -615,7 +617,7 @@ func TestLower(t *testing.T) {
 		{"àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ", "", "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅺⅻ"},
 	}
 	for _, c := range tbl {
-		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(variable.CharacterSetConnection, c.chs)
+		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(vardef.CharacterSetConnection, c.chs)
 		require.NoError(t, err)
 		f, err := newFunctionForTest(ctx, ast.Lower, primitiveValsToConstants(ctx, []any{c.input})...)
 		require.NoError(t, err)
@@ -674,7 +676,7 @@ func TestUpper(t *testing.T) {
 		{"àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ", "", "ÀÁÈÉÊÌÍÒÓÙÚÜĀĒĚĪŃŇŌŪǍǏǑǓǕǗǙǛⅪⅫ"},
 	}
 	for _, c := range tbl {
-		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(variable.CharacterSetConnection, c.chs)
+		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(vardef.CharacterSetConnection, c.chs)
 		require.NoError(t, err)
 		f, err := newFunctionForTest(ctx, ast.Upper, primitiveValsToConstants(ctx, []any{c.input})...)
 		require.NoError(t, err)
@@ -779,7 +781,7 @@ func TestReplace(t *testing.T) {
 	for i, c := range cases {
 		f, err := newFunctionForTest(ctx, ast.Replace, primitiveValsToConstants(ctx, c.args)...)
 		require.NoError(t, err)
-		require.Equalf(t, c.flen, f.GetType().GetFlen(), "test %v", i)
+		require.Equalf(t, c.flen, f.GetType(ctx).GetFlen(), "test %v", i)
 		d, err := f.Eval(ctx, chunk.Row{})
 		if c.getErr {
 			require.Error(t, err)
@@ -1090,8 +1092,8 @@ func TestLocate(t *testing.T) {
 	Dtbl2 := tblToDtbl(tbl2)
 	for i, c := range Dtbl2 {
 		exprs := datumsToConstants(c["Args"])
-		types.SetBinChsClnFlag(exprs[0].GetType())
-		types.SetBinChsClnFlag(exprs[1].GetType())
+		types.SetBinChsClnFlag(exprs[0].GetType(ctx))
+		types.SetBinChsClnFlag(exprs[1].GetType(ctx))
 		f, err := instr.getFunction(ctx, exprs)
 		require.NoError(t, err)
 		got, err := evalBuiltinFunc(f, ctx, chunk.Row{})
@@ -1255,6 +1257,7 @@ func TestHexFunc(t *testing.T) {
 		{0x12, false, false, "12"},
 		{nil, true, false, ""},
 		{errors.New("must err"), false, true, ""},
+		{"🀁", false, false, "F09F8081"},
 	}
 	for _, c := range cases {
 		f, err := newFunctionForTest(ctx, ast.Hex, primitiveValsToConstants(ctx, []any{c.arg})...)
@@ -1282,9 +1285,10 @@ func TestHexFunc(t *testing.T) {
 		{"你好", "gbk", "C4E3BAC3", 0},
 		{"一忒(๑•ㅂ•)و✧", "", "E4B880E5BF9228E0B991E280A2E38582E280A229D988E29CA7", 0},
 		{"一忒(๑•ㅂ•)و✧", "gbk", "", errno.ErrInvalidCharacterString},
+		{"🀁", "gb18030", "9438E131", 0},
 	}
 	for _, c := range strCases {
-		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(variable.CharacterSetConnection, c.chs)
+		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(vardef.CharacterSetConnection, c.chs)
 		require.NoError(t, err)
 		f, err := newFunctionForTest(ctx, ast.Hex, primitiveValsToConstants(ctx, []any{c.arg})...)
 		require.NoError(t, err)
@@ -1365,7 +1369,7 @@ func TestBitLength(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(variable.CharacterSetConnection, c.chs)
+		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(vardef.CharacterSetConnection, c.chs)
 		require.NoError(t, err)
 		f, err := newFunctionForTest(ctx, ast.BitLength, primitiveValsToConstants(ctx, []any{c.args})...)
 		require.NoError(t, err)
@@ -1467,7 +1471,7 @@ func TestCharLength(t *testing.T) {
 	for _, v := range tbl {
 		fc := funcs[ast.CharLength]
 		arg := datumsToConstants(types.MakeDatums(v.input))
-		tp := arg[0].GetType()
+		tp := arg[0].GetType(ctx)
 		tp.SetType(mysql.TypeVarString)
 		tp.SetCharset(charset.CharsetBin)
 		tp.SetCollate(charset.CollationBin)
@@ -1557,13 +1561,13 @@ func TestLpad(t *testing.T) {
 		{"hi", 0, "?", ""},
 		{"hi", -1, "?", nil},
 		{"hi", 1, "", "h"},
-		{"hi", 5, "", nil},
+		{"hi", 5, "", ""},
 		{"hi", 5, "ab", "abahi"},
 		{"hi", 6, "ab", "ababhi"},
 		{"中文", 5, "字符", "字符字中文"},
 		{"中文", 1, "a", "中"},
 		{"中文", -5, "字符", nil},
-		{"中文", 10, "", nil},
+		{"中文", 10, "", ""},
 	}
 	fc := funcs[ast.Lpad]
 	for _, test := range tests {
@@ -1597,13 +1601,13 @@ func TestRpad(t *testing.T) {
 		{"hi", 0, "?", ""},
 		{"hi", -1, "?", nil},
 		{"hi", 1, "", "h"},
-		{"hi", 5, "", nil},
+		{"hi", 5, "", ""},
 		{"hi", 5, "ab", "hiaba"},
 		{"hi", 6, "ab", "hiabab"},
 		{"中文", 5, "字符", "中文字符字"},
 		{"中文", 1, "a", "中"},
 		{"中文", -5, "字符", nil},
-		{"中文", 10, "", nil},
+		{"中文", 10, "", ""},
 	}
 	fc := funcs[ast.Rpad]
 	for _, test := range tests {
@@ -2009,7 +2013,7 @@ func TestFormat(t *testing.T) {
 			for i := 0; i < tt.warnings; i++ {
 				require.Truef(t, terror.ErrorEqual(types.ErrTruncatedWrongVal, warnings[i].Err), "test %v", tt)
 			}
-			ctx.GetSessionVars().StmtCtx.SetWarnings([]stmtctx.SQLWarn{})
+			ctx.GetSessionVars().StmtCtx.SetWarnings([]contextutil.SQLWarn{})
 		}
 	}
 	ctx.GetSessionVars().StmtCtx.SetTypeFlags(origTypeFlags)
@@ -2039,7 +2043,7 @@ func TestFormat(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		require.True(t, terror.ErrorEqual(errUnknownLocale, warnings[i].Err))
 	}
-	ctx.GetSessionVars().StmtCtx.SetWarnings([]stmtctx.SQLWarn{})
+	ctx.GetSessionVars().StmtCtx.SetWarnings([]contextutil.SQLWarn{})
 }
 
 func TestFromBase64(t *testing.T) {
@@ -2136,7 +2140,7 @@ func TestFromBase64Sig(t *testing.T) {
 			require.Equal(t, 1, len(warnings))
 			lastWarn := warnings[len(warnings)-1]
 			require.True(t, terror.ErrorEqual(errWarnAllowedPacketOverflowed, lastWarn.Err))
-			ctx.GetSessionVars().StmtCtx.SetWarnings([]stmtctx.SQLWarn{})
+			ctx.GetSessionVars().StmtCtx.SetWarnings([]contextutil.SQLWarn{})
 		}
 		require.Equal(t, test.expect, res)
 	}
@@ -2215,7 +2219,7 @@ func TestOrd(t *testing.T) {
 		{"数据库", 51965, "gbk", false, false},
 	}
 	for _, c := range cases {
-		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(variable.CharacterSetConnection, c.chs)
+		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(vardef.CharacterSetConnection, c.chs)
 		require.NoError(t, err)
 		f, err := newFunctionForTest(ctx, ast.Ord, primitiveValsToConstants(ctx, []any{c.args})...)
 		require.NoError(t, err)
@@ -2432,7 +2436,7 @@ func TestToBase64(t *testing.T) {
 		{"一二三!", "", "5LiA5LqM5LiJIQ=="},
 	}
 	for _, c := range tbl {
-		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(variable.CharacterSetConnection, c.chs)
+		err := ctx.GetSessionVars().SetSystemVarWithoutValidation(vardef.CharacterSetConnection, c.chs)
 		require.NoError(t, err)
 		f, err := newFunctionForTest(ctx, ast.ToBase64, primitiveValsToConstants(ctx, []any{c.input})...)
 		require.NoError(t, err)
@@ -2504,7 +2508,7 @@ func TestToBase64Sig(t *testing.T) {
 			require.Equal(t, 1, len(warnings))
 			lastWarn := warnings[len(warnings)-1]
 			require.True(t, terror.ErrorEqual(errWarnAllowedPacketOverflowed, lastWarn.Err))
-			ctx.GetSessionVars().StmtCtx.SetWarnings([]stmtctx.SQLWarn{})
+			ctx.GetSessionVars().StmtCtx.SetWarnings([]contextutil.SQLWarn{})
 		} else {
 			require.False(t, isNull)
 		}

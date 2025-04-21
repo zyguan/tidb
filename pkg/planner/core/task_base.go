@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/planner/cardinality"
 	"github.com/pingcap/tidb/pkg/planner/core/base"
+	"github.com/pingcap/tidb/pkg/planner/core/cost"
 	"github.com/pingcap/tidb/pkg/planner/property"
 	"github.com/pingcap/tidb/pkg/statistics"
 	"github.com/pingcap/tidb/pkg/util/logutil"
@@ -40,6 +41,10 @@ type RootTask struct {
 	p       base.PhysicalPlan
 	isEmpty bool // isEmpty indicates if this task contains a dual table and returns empty data.
 	// TODO: The flag 'isEmpty' is only checked by Projection and UnionAll. We should support more cases in the future.
+
+	// For copTask and rootTask, when we compose physical tree bottom-up, index join need some special info
+	// fetched from underlying ds which built index range or table range based on these runtime constant.
+	IndexJoinInfo *IndexJoinInfo
 }
 
 // GetPlan returns the root task's plan.
@@ -66,6 +71,9 @@ func (t *RootTask) SetEmpty(x bool) {
 func (t *RootTask) Copy() base.Task {
 	return &RootTask{
 		p: t.p,
+
+		// when copying, just copy it out.
+		IndexJoinInfo: t.IndexJoinInfo,
 	}
 }
 
@@ -200,12 +208,12 @@ func (t *MppTask) ConvertToRootTaskImpl(ctx base.PlanContext) *RootTask {
 			// It's only for TableScan. This is ensured by converting mppTask to rootTask just after TableScan is built,
 			// so no other operators are added into this mppTask.
 			logutil.BgLogger().Error("expect Selection or TableScan for mppTask.p", zap.String("mppTask.p", t.p.TP()))
-			return invalidTask
+			return base.InvalidTask.(*RootTask)
 		}
 		selectivity, _, err := cardinality.Selectivity(ctx, t.tblColHists, t.rootTaskConds, nil)
 		if err != nil {
 			logutil.BgLogger().Debug("calculate selectivity failed, use selection factor", zap.Error(err))
-			selectivity = SelectionFactor
+			selectivity = cost.SelectionFactor
 		}
 		sel := PhysicalSelection{Conditions: t.rootTaskConds}.Init(ctx, rt.GetPlan().StatsInfo().Scale(selectivity), rt.GetPlan().QueryBlockOffset())
 		sel.fromDataSource = true
@@ -252,11 +260,15 @@ type CopTask struct {
 	rootTaskConds []expression.Expression
 
 	// For table partition.
-	physPlanPartInfo PhysPlanPartInfo
+	physPlanPartInfo *PhysPlanPartInfo
 
 	// expectCnt is the expected row count of upper task, 0 for unlimited.
 	// It's used for deciding whether using paging distsql.
 	expectCnt uint64
+
+	// For copTask and rootTask, when we compose physical tree bottom-up, index join need some special info
+	// fetched from underlying ds which built index range or table range based on these runtime constant.
+	IndexJoinInfo *IndexJoinInfo
 }
 
 // Invalid implements Task interface.
@@ -330,7 +342,13 @@ func (t *CopTask) ConvertToRootTask(ctx base.PlanContext) base.Task {
 	return t.Copy().(*CopTask).convertToRootTaskImpl(ctx)
 }
 
-func (t *CopTask) convertToRootTaskImpl(ctx base.PlanContext) *RootTask {
+func (t *CopTask) convertToRootTaskImpl(ctx base.PlanContext) (rt *RootTask) {
+	defer func() {
+		if t.IndexJoinInfo != nil {
+			// return indexJoinInfo upward, when copTask is converted to rootTask.
+			rt.IndexJoinInfo = t.IndexJoinInfo
+		}
+	}()
 	// copTasks are run in parallel, to make the estimated cost closer to execution time, we amortize
 	// the cost to cop iterator workers. According to `CopClient::Send`, the concurrency
 	// is Min(DistSQLScanConcurrency, numRegionsInvolvedInScan), since we cannot infer
@@ -344,7 +362,7 @@ func (t *CopTask) convertToRootTaskImpl(ctx base.PlanContext) *RootTask {
 				tp = tp.Children()[0]
 			} else {
 				join := tp.(*PhysicalHashJoin)
-				tp = join.children[1-join.InnerChildIdx]
+				tp = join.Children()[1-join.InnerChildIdx]
 			}
 		}
 		ts := tp.(*PhysicalTableScan)
@@ -369,7 +387,6 @@ func (t *CopTask) convertToRootTaskImpl(ctx base.PlanContext) *RootTask {
 		p.PlanPartInfo = t.physPlanPartInfo
 		setTableScanToTableRowIDScan(p.tablePlan)
 		newTask.SetPlan(p)
-		t.handleRootTaskConds(ctx, newTask)
 		if t.needExtraProj {
 			schema := t.originSchema
 			proj := PhysicalProjection{Exprs: expression.Column2Exprs(schema.Columns)}.Init(ctx, p.StatsInfo(), t.idxMergePartPlans[0].QueryBlockOffset(), nil)
@@ -377,6 +394,7 @@ func (t *CopTask) convertToRootTaskImpl(ctx base.PlanContext) *RootTask {
 			proj.SetChildren(p)
 			newTask.SetPlan(proj)
 		}
+		t.handleRootTaskConds(ctx, newTask)
 		return newTask
 	}
 	if t.indexPlan != nil && t.tablePlan != nil {
@@ -393,7 +411,7 @@ func (t *CopTask) convertToRootTaskImpl(ctx base.PlanContext) *RootTask {
 				tp = tp.Children()[0]
 			} else {
 				join := tp.(*PhysicalHashJoin)
-				tp = join.children[1-join.InnerChildIdx]
+				tp = join.Children()[1-join.InnerChildIdx]
 			}
 		}
 		ts := tp.(*PhysicalTableScan)

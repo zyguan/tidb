@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/tidb/pkg/disttask/framework/proto"
 	"github.com/pingcap/tidb/pkg/sessionctx"
 	"github.com/pingcap/tidb/pkg/util/cpu"
+	"github.com/pingcap/tidb/pkg/util/injectfailpoint"
 	"github.com/pingcap/tidb/pkg/util/sqlescape"
 	"github.com/pingcap/tidb/pkg/util/sqlexec"
 )
@@ -37,6 +38,9 @@ func (mgr *TaskManager) InitMeta(ctx context.Context, tidbID string, role string
 // InitMetaSession insert the manager information into dist_framework_meta.
 // if the record exists, update the cpu_count and role.
 func (*TaskManager) InitMetaSession(ctx context.Context, se sessionctx.Context, execID string, role string) error {
+	if err := injectfailpoint.DXFRandomErrorWithOnePercent(); err != nil {
+		return err
+	}
 	cpuCount := cpu.GetCPUCount()
 	_, err := sqlexec.ExecSQL(ctx, se.GetSQLExecutor(), `
 		insert into mysql.dist_framework_meta(host, role, cpu_count, keyspace_id)
@@ -52,6 +56,9 @@ func (*TaskManager) InitMetaSession(ctx context.Context, se sessionctx.Context, 
 // Don't update role for we only update it in `set global tidb_service_scope`.
 // if not there might has a data race.
 func (mgr *TaskManager) RecoverMeta(ctx context.Context, execID string, role string) error {
+	if err := injectfailpoint.DXFRandomErrorWithOnePercent(); err != nil {
+		return err
+	}
 	cpuCount := cpu.GetCPUCount()
 	_, err := mgr.ExecuteSQLWithNewSession(ctx, `
 		insert into mysql.dist_framework_meta(host, role, cpu_count, keyspace_id)
@@ -66,6 +73,9 @@ func (mgr *TaskManager) RecoverMeta(ctx context.Context, execID string, role str
 func (mgr *TaskManager) DeleteDeadNodes(ctx context.Context, nodes []string) error {
 	if len(nodes) == 0 {
 		return nil
+	}
+	if err := injectfailpoint.DXFRandomErrorWithOnePercent(); err != nil {
+		return err
 	}
 	return mgr.WithNewTxn(ctx, func(se sessionctx.Context) error {
 		deleteSQL := new(strings.Builder)
@@ -84,35 +94,12 @@ func (mgr *TaskManager) DeleteDeadNodes(ctx context.Context, nodes []string) err
 	})
 }
 
-// GetManagedNodes implements scheduler.TaskManager interface.
-func (mgr *TaskManager) GetManagedNodes(ctx context.Context) ([]proto.ManagedNode, error) {
-	var nodes []proto.ManagedNode
-	err := mgr.WithNewSession(func(se sessionctx.Context) error {
-		var err2 error
-		nodes, err2 = mgr.getManagedNodesWithSession(ctx, se)
-		return err2
-	})
-	return nodes, err
-}
-
-func (mgr *TaskManager) getManagedNodesWithSession(ctx context.Context, se sessionctx.Context) ([]proto.ManagedNode, error) {
-	nodes, err := mgr.getAllNodesWithSession(ctx, se)
-	if err != nil {
-		return nil, err
-	}
-	nodeMap := make(map[string][]proto.ManagedNode, 2)
-	for _, node := range nodes {
-		nodeMap[node.Role] = append(nodeMap[node.Role], node)
-	}
-	if len(nodeMap["background"]) == 0 {
-		return nodeMap[""], nil
-	}
-	return nodeMap["background"], nil
-}
-
 // GetAllNodes gets nodes in dist_framework_meta.
 func (mgr *TaskManager) GetAllNodes(ctx context.Context) ([]proto.ManagedNode, error) {
 	var nodes []proto.ManagedNode
+	if err := injectfailpoint.DXFRandomErrorWithOnePercent(); err != nil {
+		return nodes, err
+	}
 	err := mgr.WithNewSession(func(se sessionctx.Context) error {
 		var err2 error
 		nodes, err2 = mgr.getAllNodesWithSession(ctx, se)
@@ -142,6 +129,9 @@ func (*TaskManager) getAllNodesWithSession(ctx context.Context, se sessionctx.Co
 
 // GetUsedSlotsOnNodes implements the scheduler.TaskManager interface.
 func (mgr *TaskManager) GetUsedSlotsOnNodes(ctx context.Context) (map[string]int, error) {
+	if err := injectfailpoint.DXFRandomErrorWithOnePercent(); err != nil {
+		return nil, err
+	}
 	// concurrency of subtasks of some step is the same, we use max(concurrency)
 	// to make group by works.
 	rs, err := mgr.ExecuteSQLWithNewSession(ctx, `
@@ -168,21 +158,21 @@ func (mgr *TaskManager) GetUsedSlotsOnNodes(ctx context.Context) (map[string]int
 	return slots, nil
 }
 
-// GetCPUCountOfManagedNode gets the cpu count of managed node.
-func (mgr *TaskManager) GetCPUCountOfManagedNode(ctx context.Context) (int, error) {
+// GetCPUCountOfNode gets the cpu count of node.
+func (mgr *TaskManager) GetCPUCountOfNode(ctx context.Context) (int, error) {
 	var cnt int
 	err := mgr.WithNewSession(func(se sessionctx.Context) error {
 		var err2 error
-		cnt, err2 = mgr.getCPUCountOfManagedNode(ctx, se)
+		cnt, err2 = mgr.getCPUCountOfNode(ctx, se)
 		return err2
 	})
 	return cnt, err
 }
 
-// getCPUCountOfManagedNode gets the cpu count of managed node.
-// returns error when there's no managed node or no node has valid cpu count.
-func (mgr *TaskManager) getCPUCountOfManagedNode(ctx context.Context, se sessionctx.Context) (int, error) {
-	nodes, err := mgr.getManagedNodesWithSession(ctx, se)
+// getCPUCountOfNode gets the cpu count of managed node.
+// returns error when there's no node or no node has valid cpu count.
+func (mgr *TaskManager) getCPUCountOfNode(ctx context.Context, se sessionctx.Context) (int, error) {
+	nodes, err := mgr.getAllNodesWithSession(ctx, se)
 	if err != nil {
 		return 0, err
 	}

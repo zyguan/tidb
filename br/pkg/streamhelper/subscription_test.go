@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/tidb/br/pkg/streamhelper"
 	"github.com/pingcap/tidb/br/pkg/streamhelper/spans"
 	"github.com/stretchr/testify/require"
@@ -32,6 +34,16 @@ func installSubscribeSupportForRandomN(c *fakeCluster, n int) {
 	}
 }
 
+func waitPendingEvents(t *testing.T, sub *streamhelper.FlushSubscriber) {
+	last := len(sub.Events())
+	time.Sleep(100 * time.Microsecond)
+	require.Eventually(t, func() bool {
+		noProg := len(sub.Events()) == last
+		last = len(sub.Events())
+		return noProg
+	}, 3*time.Second, 100*time.Millisecond)
+}
+
 func TestSubBasic(t *testing.T) {
 	req := require.New(t)
 	ctx := context.Background()
@@ -47,6 +59,7 @@ func TestSubBasic(t *testing.T) {
 	}
 	sub.HandleErrors(ctx)
 	req.NoError(sub.PendingErrors())
+	waitPendingEvents(t, sub)
 	sub.Drop()
 	s := spans.Sorted(spans.NewFullWith(spans.Full(), 1))
 	for k := range sub.Events() {
@@ -81,6 +94,7 @@ func TestNormalError(t *testing.T) {
 		cp = c.advanceCheckpoints()
 		c.flushAll()
 	}
+	waitPendingEvents(t, sub)
 	sub.Drop()
 	s := spans.Sorted(spans.NewFullWith(spans.Full(), 1))
 	for k := range sub.Events() {
@@ -155,6 +169,7 @@ func TestStoreRemoved(t *testing.T) {
 	sub.HandleErrors(ctx)
 	req.NoError(sub.PendingErrors())
 
+	waitPendingEvents(t, sub)
 	sub.Drop()
 	s := spans.Sorted(spans.NewFullWith(spans.Full(), 1))
 	for k := range sub.Events() {
@@ -188,6 +203,8 @@ func TestSomeOfStoreUnsupported(t *testing.T) {
 	}
 	s := spans.Sorted(spans.NewFullWith(spans.Full(), 1))
 	m := new(sync.Mutex)
+
+	waitPendingEvents(t, sub)
 	sub.Drop()
 	for k := range sub.Events() {
 		s.Merge(k)
@@ -223,4 +240,29 @@ func TestSomeOfStoreUnsupported(t *testing.T) {
 	_, err := coll.Finish(ctx)
 	req.NoError(err)
 	req.Equal(cp, s.MinValue())
+}
+
+func TestEncounterError(t *testing.T) {
+	req := require.New(t)
+	ctx := context.Background()
+	c := createFakeCluster(t, 4, true)
+	c.splitAndScatter("0001", "0002", "0003", "0008", "0009", "0010", "0100", "0956", "1000")
+
+	sub := streamhelper.NewSubscriber(c, c)
+	installSubscribeSupport(c)
+	req.NoError(sub.UpdateStoreTopology(ctx))
+
+	o := new(sync.Once)
+	failpoint.EnableCall("github.com/pingcap/tidb/br/pkg/streamhelper/listen_flush_stream", func(storeID uint64, err *error) {
+		o.Do(func() {
+			*err = context.Canceled
+		})
+	})
+
+	c.flushAll()
+	require.Eventually(t, func() bool {
+		return sub.PendingErrors() != nil
+	}, 3*time.Second, 100*time.Millisecond)
+	sub.HandleErrors(context.Background())
+	require.NoError(t, sub.PendingErrors())
 }

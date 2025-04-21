@@ -46,10 +46,10 @@ type rowWithPartition struct {
 	partitionID int
 }
 
-func processPanicAndLog(errOutputChan chan rowWithError, r any) {
+func processPanicAndLog(errOutputChan chan<- rowWithError, r any) {
 	err := util.GetRecoverError(r)
 	errOutputChan <- rowWithError{err: err}
-	logutil.BgLogger().Error("parallel sort panicked", zap.Error(err), zap.Stack("stack"))
+	logutil.BgLogger().Error("executor panicked", zap.Error(err), zap.Stack("stack"))
 }
 
 // chunkWithMemoryUsage contains chunk and memory usage.
@@ -74,6 +74,18 @@ func injectParallelSortRandomFail(triggerFactor int32) {
 			}
 		}
 	})
+}
+
+func injectErrorForIssue59655(triggerFactor int32) (err error) {
+	failpoint.Inject("Issue59655", func(val failpoint.Value) {
+		if val.(bool) {
+			randNum := rand.Int31n(1000)
+			if randNum < triggerFactor {
+				err = errors.Errorf("issue 59655 error")
+			}
+		}
+	})
+	return
 }
 
 // It's used only when spill is triggered

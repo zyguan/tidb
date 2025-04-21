@@ -28,18 +28,19 @@ import (
 	"github.com/pingcap/tidb/pkg/expression"
 	"github.com/pingcap/tidb/pkg/expression/aggregation"
 	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
-	"github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/terror"
 	"github.com/pingcap/tidb/pkg/sessionctx"
 	"github.com/pingcap/tidb/pkg/sessionctx/stmtctx"
-	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tidb/pkg/util/collate"
+	contextutil "github.com/pingcap/tidb/pkg/util/context"
 	"github.com/pingcap/tidb/pkg/util/mock"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/pingcap/tidb/pkg/util/timeutil"
@@ -115,7 +116,7 @@ func (h coprHandler) buildDAGExecutor(req *coprocessor.Request) (*dagContext, ex
 	if dagReq.DivPrecisionIncrement != nil {
 		sctx.GetSessionVars().DivPrecisionIncrement = int(*dagReq.DivPrecisionIncrement)
 	} else {
-		sctx.GetSessionVars().DivPrecisionIncrement = variable.DefDivPrecisionIncrement
+		sctx.GetSessionVars().DivPrecisionIncrement = vardef.DefDivPrecisionIncrement
 	}
 
 	ctx := &dagContext{
@@ -384,7 +385,7 @@ func (h coprHandler) buildStreamAgg(ctx *dagContext, executor *tipb.Executor) (*
 	}
 	groupByCollators := make([]collate.Collator, 0, len(groupBys))
 	for _, expr := range groupBys {
-		groupByCollators = append(groupByCollators, collate.GetCollator(expr.GetType().GetCollate()))
+		groupByCollators = append(groupByCollators, collate.GetCollator(expr.GetType(ctx.evalCtx.sctx.GetExprCtx().GetEvalCtx()).GetCollate()))
 	}
 
 	return &streamAggExec{
@@ -469,7 +470,7 @@ func (e *evalContext) decodeRelatedColumnVals(relatedColOffsets []int, value [][
 
 // flagsAndTzToSessionContext creates a StatementContext from a `tipb.SelectRequest.Flags`.
 func flagsAndTzToSessionContext(flags uint64, tz *time.Location) sessionctx.Context {
-	sctx := mock.NewContext()
+	sctx := mock.NewContextDeprecated()
 	sc := stmtctx.NewStmtCtx()
 	sc.InitFromPBFlagAndTz(flags, tz)
 	sctx.GetSessionVars().StmtCtx = sc
@@ -539,7 +540,7 @@ func (mock *mockBatchCopDataClient) Recv() (*coprocessor.BatchResponse, error) {
 	return nil, io.EOF
 }
 
-func (h coprHandler) initSelectResponse(err error, warnings []stmtctx.SQLWarn, counts []int64) *tipb.SelectResponse {
+func (h coprHandler) initSelectResponse(err error, warnings []contextutil.SQLWarn, counts []int64) *tipb.SelectResponse {
 	selResp := &tipb.SelectResponse{
 		Error:        toPBError(err),
 		OutputCounts: counts,
