@@ -324,6 +324,10 @@ func main() {
 	if intest.EnableInternalCheck {
 		logutil.BgLogger().Warn("internal check is enabled, this should NOT happen in the production environment")
 	}
+
+	atomic.StoreUint64(&transaction.ManagedLockTTL, 200)
+	tikv.EnableFailpoints()
+
 	setGlobalVars()
 	setCPUAffinity()
 	cgmon.StartCgroupMonitor()
